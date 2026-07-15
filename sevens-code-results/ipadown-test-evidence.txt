@@ -1,0 +1,50 @@
+SEVEN'S CODE iOS / action-ipadown test
+Date: 2026-07-14 America/Lima
+
+1. Historical search result
+Official redirect: https://www.sevenscode.jp/AppStore
+Historical App Store URL: https://apps.apple.com/jp/app/sevens-code/id1424882955
+App Store numeric ID: 1424882955
+
+Raw search snippet:
+音楽ゲームアプリ「SEVEN's CODE」収録 SEVEN's CODE https://www.sevenscode.jp/AppStore https://apps.apple.com/jp/app/sevens-code/id1424882955 GooglePlay...
+
+2. Current Apple Lookup API
+Request:
+https://itunes.apple.com/lookup?id=1424882955&country=jp
+
+Response:
+{
+  "resultCount": 0,
+  "results": []
+}
+
+3. action-ipadown engine test
+Engine used: NyaMisty/ipatool-py, branch itunes_server
+Command:
+python3 main.py --json lookup --get-verid -i 1424882955 -c JP
+
+Result:
+INFO Looking up app in country JP with AppID 1424882955
+CRITICAL Failed to find app in country JP with AppID 1424882955
+
+Control using the Android package as bundle ID:
+python3 main.py --json lookup --get-verid -b jp.co.applibot.ghmabgzaxkx -c JP
+
+Result:
+INFO Looking up app in country JP with BundleID jp.co.applibot.ghmabgzaxkx
+CRITICAL Failed to find app in country JP with BundleID jp.co.applibot.ghmabgzaxkx
+
+4. Official redirect endpoint status
+Request:
+https://www.sevenscode.jp/AppStore
+
+Response headers:
+HTTP/2 200
+content-type: text/html
+content-length: 2795
+last-modified: Wed, 19 Aug 2020 03:43:06 GMT
+server: AmazonS3
+
+Conclusion:
+The historical iOS App Store ID is 1424882955. The current public Apple catalog no longer returns the retired app, so action-ipadown lookup cannot obtain its bundle ID or current appVerID. Testing historyver_id or download_id requires an Apple account and the iTunes Header Service used by action-ipadown; the best chance is an Apple ID that acquired SEVEN'S CODE before delisting.
