@@ -1,0 +1,250 @@
+name: SEVEN'S CODE emulator snapshot search
+
+on:
+  push:
+    branches:
+      - sevens-code-lookup
+    paths:
+      - .github/workflows/sevens-code-snapshot-search.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Search public snapshot and backup indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result/raw result/ia_metadata
+          python3 - <<'PY'
+          import concurrent.futures
+          import html
+          import json
+          import pathlib
+          import re
+          import time
+          import urllib.parse
+          import urllib.request
+
+          OUT = pathlib.Path('result')
+          RAW = OUT / 'raw'
+          META = OUT / 'ia_metadata'
+          UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SEVENS-CODE-snapshot-research'
+
+          title_terms = [
+              '"SEVEN\'S CODE"', '"SEVENS CODE"', 'セブンスコード',
+              'jp.co.applibot.ghmabgzaxkx', 'octocacheevai', 'octo.abot.sh'
+          ]
+          snapshot_terms = [
+              'BlueStacks', 'BlueStacks_nxt', 'Data.vhdx', 'Nox', 'BignoxVMS',
+              'LDPlayer', 'leidian', 'MuMu', 'userdata-qemu.img', 'qcow2',
+              'vmdk', 'vdi', 'ova', 'emulator backup', 'android backup',
+              'Titanium Backup', 'Swift Backup', 'Neo Backup', 'snapshot'
+          ]
+          multilingual = [
+              'セブンスコード エミュレータ バックアップ',
+              'セブンスコード 端末 データ 保存',
+              'セブンスコード サービス終了 バックアップ',
+              'SEVEN\'S CODE 模拟器 备份',
+              'SEVEN\'S CODE 数据包 存档',
+              'SEVEN\'S CODE 全曲 离线版',
+              'SEVEN\'S CODE 安卓模拟器 数据',
+          ]
+          player_terms = [
+              'extravatorz SEVEN\'S CODE backup',
+              'elevatorz SEVEN\'S CODE emulator',
+              'Tricoro SEVEN\'S CODE backup',
+              'ymnh0sub SEVEN\'S CODE backup',
+              'TenCha SEVEN\'S CODE data',
+              'Arud Astra SEVEN\'S CODE backup',
+          ]
+
+          queries = []
+          for t in title_terms:
+              queries.append(t)
+              for s in snapshot_terms:
+                  queries.append(f'{t} {s}')
+          queries.extend(multilingual)
+          queries.extend(player_terms)
+          queries = list(dict.fromkeys(queries))
+
+          def get(url, timeout=60):
+              req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': '*/*'})
+              with urllib.request.urlopen(req, timeout=timeout) as r:
+                  return getattr(r, 'status', 200), r.headers.get('content-type',''), r.read(), r.geturl()
+
+          inventory = []
+          candidates = []
+          evidence = []
+
+          # Search-engine mirrors. Results are preserved for later manual inspection.
+          urls = {}
+          for i, q in enumerate(queries):
+              enc = urllib.parse.quote_plus(q)
+              urls[f'bing_{i:03d}.xml'] = f'https://www.bing.com/search?format=rss&q={enc}'
+              urls[f'ddg_{i:03d}.html'] = f'https://html.duckduckgo.com/html/?q={enc}'
+              if i < 80:
+                  urls[f'jina_google_{i:03d}.txt'] = f'https://r.jina.ai/http://www.google.com/search?q={enc}'
+
+          # Internet Archive targeted metadata queries.
+          ia_queries = list(title_terms) + multilingual + player_terms + [
+              'title:("SEVEN S CODE")',
+              'description:("SEVEN S CODE")',
+              '(bluestacks OR nox OR ldplayer OR mumu) AND ("rhythm game" OR "mobile game") AND (backup OR snapshot)',
+              '(Data.vhdx OR userdata-qemu.img OR qcow2 OR vmdk OR vdi) AND (android OR emulator) AND game',
+          ]
+          for i, q in enumerate(ia_queries):
+              params = urllib.parse.urlencode({
+                  'q': q,
+                  'fl[]': 'identifier,title,description,subject,creator,mediatype,collection,date,downloads',
+                  'rows': 200,
+                  'page': 1,
+                  'output': 'json',
+              })
+              urls[f'ia_search_{i:03d}.json'] = 'https://archive.org/advancedsearch.php?' + params
+
+          # Community / file-sharing oriented searches.
+          site_queries = [
+              'site:archive.org/details "SEVEN\'S CODE"',
+              'site:drive.google.com "SEVEN\'S CODE"',
+              'site:mega.nz "SEVEN\'S CODE"',
+              'site:mediafire.com "SEVEN\'S CODE"',
+              'site:pan.baidu.com "SEVEN\'S CODE"',
+              'site:123pan.com "SEVEN\'S CODE"',
+              'site:alipan.com "SEVEN\'S CODE"',
+              'site:discord.gg "SEVEN\'S CODE"',
+              'site:t.me "SEVEN\'S CODE"',
+              '"jp.co.applibot.ghmabgzaxkx" file',
+              '"octocacheevai" file',
+              '"files/octo/pdb/1/102"',
+          ]
+          base_idx = len(queries)
+          for j, q in enumerate(site_queries):
+              enc = urllib.parse.quote_plus(q)
+              urls[f'bing_site_{j:03d}.xml'] = f'https://www.bing.com/search?format=rss&q={enc}'
+              urls[f'ddg_site_{j:03d}.html'] = f'https://html.duckduckgo.com/html/?q={enc}'
+              urls[f'jina_google_site_{j:03d}.txt'] = f'https://r.jina.ai/http://www.google.com/search?q={enc}'
+
+          def fetch_one(item):
+              name, url = item
+              try:
+                  status, ctype, data, final = get(url, 75)
+                  (RAW / name).write_bytes(data)
+                  return {'name': name, 'url': url, 'final_url': final, 'status': status,
+                          'content_type': ctype, 'bytes': len(data)}
+              except Exception as exc:
+                  (RAW / (name + '.error')).write_text(str(exc), encoding='utf-8')
+                  return {'name': name, 'url': url, 'error': str(exc)}
+
+          with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+              inventory = list(ex.map(fetch_one, urls.items()))
+          (OUT / 'request_inventory.json').write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding='utf-8')
+
+          # Parse IA search results and inspect every unique matching item's file list.
+          ia_docs = {}
+          for p in RAW.glob('ia_search_*.json'):
+              try:
+                  data = json.loads(p.read_text(errors='replace'))
+                  for d in data.get('response', {}).get('docs', []):
+                      ident = d.get('identifier')
+                      if ident:
+                          ia_docs[ident] = d
+              except Exception:
+                  pass
+
+          def inspect_ia(ident):
+              url = 'https://archive.org/metadata/' + urllib.parse.quote(ident)
+              try:
+                  status, ctype, data, final = get(url, 75)
+                  (META / f'{ident}.json').write_bytes(data)
+                  obj = json.loads(data)
+                  meta = obj.get('metadata', {})
+                  files = obj.get('files', [])
+                  names = [str(f.get('name','')) for f in files]
+                  text = json.dumps(meta, ensure_ascii=False) + '\n' + '\n'.join(names)
+                  low = text.lower()
+                  exact = [x for x in ('seven\'s code','sevens code','セブンスコード','jp.co.applibot.ghmabgzaxkx','octocacheevai','octo.abot.sh') if x in low]
+                  disk_files = [n for n in names if re.search(r'(?i)(data\.vhdx|userdata-qemu\.img|\.qcow2$|\.vmdk$|\.vdi$|\.ova$|\.ovf$|\.tib$|\.ab$|titanium|swift.?backup|neo.?backup|bluestacks|bignox|ldplayer|leidian|mumu)', n)]
+                  return {'identifier': ident, 'metadata': meta, 'exact_matches': exact,
+                          'disk_or_backup_files': disk_files, 'file_count': len(files), 'metadata_url': url}
+              except Exception as exc:
+                  return {'identifier': ident, 'error': str(exc), 'metadata_url': url}
+
+          inspected = []
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+              inspected = list(ex.map(inspect_ia, sorted(ia_docs)))
+          (OUT / 'internet_archive_items.json').write_text(json.dumps(inspected, ensure_ascii=False, indent=2), encoding='utf-8')
+
+          # Scan fetched search pages for exact terms, cloud links, and snapshot filenames.
+          url_re = re.compile(r'https?://[^\s"\'<>\\]+', re.I)
+          cloud_hosts = ('archive.org','drive.google.com','docs.google.com','mega.nz','mediafire.com',
+                         'pan.baidu.com','123pan.com','alipan.com','aliyundrive.com','lanzou','cloud.189.cn',
+                         'discord.gg','t.me','github.com','huggingface.co','bilibili.com','nicovideo.jp','youtube.com')
+          key_re = re.compile(r'(?i)(seven.?s.?code|セブンスコード|jp\.co\.applibot\.ghmabgzaxkx|octocacheevai|octo\.abot\.sh|files/octo|data\.vhdx|userdata-qemu\.img|\.qcow2|\.vmdk|\.vdi|bluestacks|bignox|ldplayer|leidian|mumu)')
+          links = set()
+          for p in RAW.iterdir():
+              if not p.is_file() or p.name.endswith('.error'):
+                  continue
+              text = html.unescape(p.read_text(errors='replace'))
+              for line in text.splitlines():
+                  if key_re.search(line):
+                      evidence.append({'source': p.name, 'line': line[:4000]})
+              for u in url_re.findall(text):
+                  clean = u.rstrip(').,];&')
+                  if any(h in clean.lower() for h in cloud_hosts):
+                      links.add(clean)
+          (OUT / 'evidence_lines.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
+          (OUT / 'candidate_links.txt').write_text('\n'.join(sorted(links)), encoding='utf-8')
+
+          # GitHub code search using the workflow token.
+          # This is executed through the REST API to include exact paths and archived repositories.
+          github_queries = [
+              '"jp.co.applibot.ghmabgzaxkx"', 'octocacheevai', '"octo.abot.sh"',
+              '"files/octo/pdb/1/102"', '"SEVEN\'S CODE" bluestacks',
+              '"SEVEN\'S CODE" backup', '"SEVEN\'S CODE" snapshot'
+          ]
+          gh_results = []
+          import os
+          token = os.environ.get('GH_TOKEN','')
+          for q in github_queries:
+              url = 'https://api.github.com/search/code?' + urllib.parse.urlencode({'q': q, 'per_page': 100})
+              req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': 'application/vnd.github+json', 'Authorization': f'Bearer {token}'})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      obj = json.loads(r.read())
+                  for item in obj.get('items', []):
+                      gh_results.append({'query': q, 'name': item.get('name'), 'path': item.get('path'),
+                                         'html_url': item.get('html_url'), 'repository': item.get('repository',{}).get('full_name')})
+              except Exception as exc:
+                  gh_results.append({'query': q, 'error': str(exc)})
+              time.sleep(1)
+          (OUT / 'github_code_search.json').write_text(json.dumps(gh_results, ensure_ascii=False, indent=2), encoding='utf-8')
+
+          positive_ia = [x for x in inspected if x.get('exact_matches') or x.get('disk_or_backup_files')]
+          summary = {
+              'queries': len(queries) + len(site_queries),
+              'requests': len(inventory),
+              'successful_requests': sum(1 for x in inventory if x.get('status')),
+              'ia_unique_items_inspected': len(inspected),
+              'ia_items_with_exact_or_disk_matches': len(positive_ia),
+              'evidence_lines': len(evidence),
+              'candidate_links': len(links),
+              'github_results': len([x for x in gh_results if x.get('html_url')]),
+          }
+          (OUT / 'positive_ia_items.json').write_text(json.dumps(positive_ia, ensure_ascii=False, indent=2), encoding='utf-8')
+          (OUT / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sevens-code-emulator-snapshot-search
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
