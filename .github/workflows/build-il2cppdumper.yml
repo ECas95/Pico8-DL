@@ -6,6 +6,11 @@ on:
       - sevens-code-lookup
     paths:
       - .github/workflows/build-il2cppdumper.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-il2cppdumper.yml
 
 permissions:
   contents: read
@@ -29,7 +34,7 @@ jobs:
 
       - name: Publish self-contained
         run: |
-          PROJECT=$(find src -path '*/Il2CppDumper/*.csproj' -o -name 'Il2CppDumper.csproj' | head -1)
+          PROJECT=$(find src -name 'Il2CppDumper.csproj' | head -1)
           echo "Project: $PROJECT"
           dotnet publish "$PROJECT" -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out
           chmod +x out/Il2CppDumper || true
