@@ -1,0 +1,155 @@
+name: Search 4PDA forum archives
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/search-4pda-current-pr.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Search forum and indexed topic pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet requests beautifulsoup4 lxml cloudscraper
+          mkdir -p result/raw
+          python3 - <<'PY'
+          import csv, hashlib, html, json, pathlib, re, time, urllib.parse
+          import cloudscraper
+          from bs4 import BeautifulSoup
+
+          out=pathlib.Path('result'); raw=out/'raw'
+          terms=[
+            "SEVEN'S CODE",'SEVENS CODE','セブンスコード','jp.co.applibot.ghmabgzaxkx',
+            'octocacheevai','octo.abot.sh','files/octo','octo/pdb/1/102','trdhaul6gig46gt4',
+            'резервная копия Nox','бэкап Nox','образ Nox','npbk',
+            'резервная копия LDPlayer','бэкап LDPlayer','ldbk',
+            'образ BlueStacks','резервная копия BlueStacks','Data.vhdx BlueStacks',
+            'бэкап MEmu','экспорт эмулятора Android','userdata-qemu.img',
+            'полный кэш игры','кэш игры с сервера','данные после установки игры',
+            'полный бэкап приложения с данными','закрытая мобильная игра архив',
+            'сервер игры закрыт данные','музыкальная игра Android','кэш ритм игры'
+          ]
+          exact=['jp.co.applibot.ghmabgzaxkx','octocacheevai','octo.abot.sh','files/octo','octo/pdb/1/102','trdhaul6gig46gt4',"seven's code",'sevens code','セブンスコード']
+          mirror_hosts=['mega.nz','drive.google.com','disk.yandex','yadi.sk','cloud.mail.ru','mediafire.com','pan.baidu.com','123pan','123865.com','t.me/','magnet:?','/forum/dl/post/']
+          s=cloudscraper.create_scraper(browser={'browser':'chrome','platform':'windows','desktop':True})
+          s.headers.update({'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150.0 Safari/537.36','Accept-Language':'ru-RU,ru;q=0.9,en;q=0.6'})
+          log=[]; links=[]; internal=[]; engines=[]
+          def quote(t):
+            try:return urllib.parse.quote_from_bytes(t.encode('cp1251'))
+            except:return urllib.parse.quote(t,safe='')
+          def decode(r):
+            for enc in ['windows-1251','cp1251','utf-8']:
+              try:
+                text=r.content.decode(enc)
+                if '�' not in text[:1500]:return text
+              except:pass
+            return r.content.decode('utf-8','replace')
+          def save(prefix,key,text):
+            name=hashlib.sha1(key.encode()).hexdigest()[:12]
+            p=raw/f'{prefix}_{name}.html';p.write_text(text,encoding='utf-8',errors='replace');return str(p)
+
+          for seed in ['https://4pda.to/forum/','https://4pda.ru/forum/']:
+            try:
+              r=s.get(seed,timeout=30);log.append({'kind':'seed','url':seed,'status':r.status_code,'bytes':len(r.content),'final':r.url})
+            except Exception as e:log.append({'kind':'seed','url':seed,'error':repr(e)})
+
+          for i,term in enumerate(terms):
+            for host in ['4pda.to','4pda.ru']:
+              url=f'https://{host}/forum/index.php?act=search&result=posts&sort=dd&source=all&query={quote(term)}&subforums=1&noform=1&st=0&exclude_trash=1'
+              try:
+                r=s.get(url,headers={'Referer':f'https://{host}/forum/'},timeout=40,allow_redirects=True);text=decode(r)
+                blocked=bool(re.search(r'403 Forbidden|Access denied|Cloudflare|Доступ ограничен|captcha',text,re.I))
+                found=set()
+                soup=BeautifulSoup(text,'lxml')
+                for a in soup.find_all('a',href=True):
+                  href=urllib.parse.urljoin(r.url,html.unescape(a['href']))
+                  if '4pda.' in href and ('showtopic=' in href or 'view=findpost' in href):found.add(href)
+                for href in found:links.append({'source':'internal','query':term,'url':href})
+                internal.append({'term':term,'host':host,'status':r.status_code,'blocked':blocked,'bytes':len(r.content),'links':len(found),'final':r.url,'file':save(f'internal_{i}_{host}',term+host,text)})
+                log.append({'kind':'internal','term':term,'host':host,'status':r.status_code,'blocked':blocked,'bytes':len(r.content),'links':len(found)})
+              except Exception as e:
+                internal.append({'term':term,'host':host,'error':repr(e)});log.append({'kind':'internal','term':term,'host':host,'error':repr(e)})
+              time.sleep(.15)
+
+          templates={'bing':'https://www.bing.com/search?format=rss&q={}','google_jina':'https://r.jina.ai/http://www.google.com/search?q={}','bing_jina':'https://r.jina.ai/http://www.bing.com/search?q={}'}
+          queries=[]
+          for term in terms:queries.extend([f'site:4pda.to/forum "{term}"',f'site:4pda.ru/forum "{term}"'])
+          queries.extend(['site:4pda.to/forum Nox резервное копирование восстановление','site:4pda.to/forum LDPlayer резервное копирование восстановление','site:4pda.to/forum BlueStacks данные игры бэкап','site:4pda.to/forum MEmu экспорт импорт образ','site:4pda.to/forum музыкальные игры Android кэш','site:4pda.to/forum закрытые мобильные игры данные сервера'])
+          for i,q in enumerate(dict.fromkeys(queries)):
+            for engine,tpl in templates.items():
+              url=tpl.format(urllib.parse.quote_plus(q))
+              try:
+                r=s.get(url,timeout=40,allow_redirects=True);text=decode(r);found=set()
+                for candidate in re.findall(r'https?://[^\s\"\'<>\]\)]+',html.unescape(text),re.I):
+                  candidate=urllib.parse.unquote(candidate)
+                  m=re.search(r'https?://4pda\.(?:to|ru)/forum/[^\s\"\'<>\]\)]+',candidate,re.I)
+                  if m:found.add(m.group(0).rstrip('.,;:&'))
+                for href in found:links.append({'source':engine,'query':q,'url':href})
+                engines.append({'query':q,'engine':engine,'status':r.status_code,'bytes':len(r.content),'links':len(found),'final':r.url,'file':save(f'engine_{i}_{engine}',q+engine,text)})
+                log.append({'kind':'engine','query':q,'engine':engine,'status':r.status_code,'bytes':len(r.content),'links':len(found)})
+              except Exception as e:engines.append({'query':q,'engine':engine,'error':repr(e)});log.append({'kind':'engine','query':q,'engine':engine,'error':repr(e)})
+              time.sleep(.1)
+
+          unique=[];seen=set();topic_ids=set()
+          for row in links:
+            url=urllib.parse.unquote(html.unescape(row['url']))
+            key=(row['source'],row['query'],url)
+            if key in seen:continue
+            seen.add(key);tm=re.search(r'(?:showtopic=|[?&]t=)(\d+)',url);pm=re.search(r'(?:showpost=|[?&]p=)(\d+)',url)
+            row={'source':row['source'],'query':row['query'],'url':url,'topic_id':tm.group(1) if tm else '','post_id':pm.group(1) if pm else ''};unique.append(row)
+            if tm:topic_ids.add(tm.group(1))
+
+          topics=[];attachments=[];mirrors=[]
+          for tid in sorted(topic_ids,key=int):
+            endpoints=[f'https://4pda.to/forum/lofiversion/index.php?t={tid}',f'https://4pda.ru/forum/lofiversion/index.php?t={tid}',f'https://4pda.to/forum/index.php?act=Print&client=printer&f=0&t={tid}',f'https://4pda.to/forum/index.php?showtopic={tid}']
+            best='';best_url='';statuses=[]
+            for url in endpoints:
+              try:
+                r=s.get(url,timeout=40,allow_redirects=True);text=decode(r);statuses.append(f'{r.status_code}:{len(r.content)}')
+                if r.status_code==200 and len(text)>len(best) and not re.search(r'403 Forbidden|Access denied|Cloudflare|captcha',text,re.I):best=text;best_url=r.url
+              except Exception:statuses.append('ERR')
+              time.sleep(.1)
+            if not best:topics.append({'topic_id':tid,'accessible':False,'statuses':'|'.join(statuses)});continue
+            soup=BeautifulSoup(best,'lxml');title=soup.title.get_text(' ',strip=True) if soup.title else '';visible=soup.get_text(' ',strip=True);low=visible.lower();hits=[k for k in exact if k in low];general=[k for k in ['резервная копия','бэкап','полный кэш','данные игры','ритм','музыкаль','npbk','ldbk','data.vhdx','userdata-qemu.img'] if k in low];score=len(hits)*10+len(general)
+            urls=set(urllib.parse.urljoin(best_url,html.unescape(a['href'])) for a in soup.find_all('a',href=True));urls.update(re.findall(r'https?://[^\s\"\'<>\]\)]+',best,re.I))
+            for url in urls:
+              if '/forum/dl/post/' in url:attachments.append({'topic_id':tid,'title':title,'url':url})
+              elif any(host in url.lower() for host in mirror_hosts):mirrors.append({'topic_id':tid,'title':title,'source':best_url,'url':url})
+            topics.append({'topic_id':tid,'accessible':True,'url':best_url,'title':title,'chars':len(visible),'score':score,'exact_hits':' | '.join(hits),'general_hits':' | '.join(general),'statuses':'|'.join(statuses)})
+
+          def dedupe(rows,fields):
+            result=[];markers=set()
+            for row in rows:
+              marker=tuple(row.get(f,'') for f in fields)
+              if marker not in markers:markers.add(marker);result.append(row)
+            return result
+          attachments=dedupe(attachments,['topic_id','url']);mirrors=dedupe(mirrors,['topic_id','url'])
+          def write_csv(name,rows):
+            fields=sorted({k for row in rows for k in row}) if rows else ['empty']
+            with (out/name).open('w',newline='',encoding='utf-8-sig') as f:
+              writer=csv.DictWriter(f,fieldnames=fields,extrasaction='ignore');writer.writeheader();writer.writerows(rows)
+          write_csv('internal.csv',internal);write_csv('engines.csv',engines);write_csv('links.csv',unique);write_csv('topics.csv',sorted(topics,key=lambda x:-int(x.get('score',0) or 0)));write_csv('attachments.csv',attachments);write_csv('mirrors.csv',mirrors)
+          summary={'terms':len(terms),'internal_requests':sum(x.get('kind')=='internal' for x in log),'internal_200':sum(x.get('kind')=='internal' and x.get('status')==200 for x in log),'internal_blocked':sum(x.get('kind')=='internal' and x.get('blocked') for x in log),'engine_requests':sum(x.get('kind')=='engine' for x in log),'engine_200':sum(x.get('kind')=='engine' and x.get('status')==200 for x in log),'links':len(unique),'topic_ids':len(topic_ids),'accessible_topics':sum(bool(x.get('accessible')) for x in topics),'attachments':len(attachments),'mirrors':len(mirrors),'exact_topics':[x for x in topics if x.get('exact_hits')]}
+          (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8');(out/'request_log.json').write_text(json.dumps(log,ensure_ascii=False,indent=2),encoding='utf-8')
+          lines=['# 4PDA search results','']+[f'- {k}: {v}' for k,v in summary.items() if k!='exact_topics']+['','## Exact SEVEN’S CODE matches','']
+          lines.extend([f"- {x.get('title')} — {x.get('url')} — {x.get('exact_hits')}" for x in summary['exact_topics']] or ['No exact package, title, Octo path, cache name or key was found.'])
+          lines.extend(['','## Highest-scoring topics',''])
+          lines.extend([f"- Score {x.get('score',0)} — {x.get('title','')} — {x.get('url','')} — {x.get('general_hits','')}" for x in sorted([x for x in topics if x.get('accessible')],key=lambda x:-int(x.get('score',0) or 0))[:50]])
+          (out/'README.md').write_text('\n'.join(lines),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 4pda-search-results
+          path: result/
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,92 @@
+name: Inspect public emulator backups
+
+on:
+  push:
+    branches:
+      - sevens-code-lookup
+    paths:
+      - .github/workflows/inspect-public-emulator-backups.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/inspect-public-emulator-backups.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Download and inspect without execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full qemu-utils libguestfs-tools >/dev/null
+
+          enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+
+          # 1) Nox backup collection (RAR): archive listing only.
+          NOX_RAR='nox-backups.rar'
+          curl -L --fail --retry 4 --connect-timeout 30 --max-time 1200 \
+            -o result/nox-backups.rar \
+            "https://archive.org/download/nox-backups/$(enc "$NOX_RAR")"
+          file result/nox-backups.rar > result/nox-backups-file.txt
+          7z l -slt result/nox-backups.rar > result/nox-backups-listing.txt || true
+
+          # 2) Generic Nox VMDK: inspect partition/filesystem and package-like paths read-only.
+          VMDK='Backup Nox Player.vmdk'
+          curl -L --fail --retry 4 --connect-timeout 30 --max-time 1200 \
+            -o result/BackupNoxPlayer.vmdk \
+            "https://archive.org/download/BackupNoxPlayer/$(enc "$VMDK")"
+          qemu-img info result/BackupNoxPlayer.vmdk > result/vmdk-qemu-info.txt || true
+          virt-filesystems --all --long -a result/BackupNoxPlayer.vmdk > result/vmdk-filesystems.txt 2>result/vmdk-filesystems-error.txt || true
+          guestfish --ro -a result/BackupNoxPlayer.vmdk -i <<'EOF' > result/vmdk-guestfish.txt 2>result/vmdk-guestfish-error.txt || true
+          ll /
+          find / data
+          find /data app
+          find /data data
+          find /data user
+          find /sdcard Android
+          EOF
+
+          # 3) Inspect head/tail signatures of large backup formats without downloading them fully.
+          python3 - <<'PY'
+          import json, pathlib, urllib.parse, urllib.request
+          targets=[
+            ('ff7tfs-nox','NoxPlayerwithFirstSoldier1028 - Server Downloaded.npbk'),
+            ('ldplayer_202506','LDPlayer.ldbk'),
+          ]
+          out=pathlib.Path('result')
+          report=[]
+          for ident,name in targets:
+            url='https://archive.org/download/'+ident+'/'+urllib.parse.quote(name)
+            for label,range_header in [('head','bytes=0-8388607'),('tail','bytes=-8388608')]:
+              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 backup-inspection','Range':range_header})
+              try:
+                with urllib.request.urlopen(req,timeout=180) as r:
+                  data=r.read()
+                  p=out/f'{ident}-{label}.bin'
+                  p.write_bytes(data)
+                  report.append({'identifier':ident,'name':name,'part':label,'status':getattr(r,'status',200),'bytes':len(data),'content_range':r.headers.get('Content-Range'),'content_type':r.headers.get('Content-Type'),'first_32_hex':data[:32].hex(),'last_32_hex':data[-32:].hex()})
+              except Exception as exc:
+                report.append({'identifier':ident,'name':name,'part':label,'error':str(exc)})
+          (out/'range-report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+          PY
+          file result/*-head.bin result/*-tail.bin > result/range-file-types.txt || true
+          for f in result/*-head.bin result/*-tail.bin; do echo "===== $f ====="; xxd -l 256 "$f"; done > result/range-hex.txt
+
+          # Remove large raw downloads; preserve reports/listings only.
+          rm -f result/nox-backups.rar result/BackupNoxPlayer.vmdk result/*-head.bin result/*-tail.bin
+          find result -maxdepth 1 -type f -printf '%f\t%s\n' | sort > result/inventory.tsv
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-emulator-backup-inspection
+          path: result/
+          if-no-files-found: error
+          retention-days: 14

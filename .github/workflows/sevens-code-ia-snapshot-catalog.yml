@@ -1,0 +1,70 @@
+name: SEVEN'S CODE IA emulator snapshot catalog
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/sevens-code-ia-snapshot-catalog.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Search Internet Archive emulator images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result/metadata
+          python3 - <<'PY'
+          import concurrent.futures,json,pathlib,re,urllib.parse,urllib.request
+          O=pathlib.Path('result'); M=O/'metadata'; UA='Mozilla/5.0 Android-emulator-preservation-search'
+          queries=[
+            '(bluestacks OR nox OR ldplayer OR mumu OR bignox) AND (backup OR snapshot OR vhdx OR vmdk OR vdi OR ova)',
+            '(Data.vhdx OR userdata-qemu.img OR qcow2 OR vmdk OR vdi OR ova OR ovf) AND (android OR emulator)',
+            '("android emulator" OR bluestacks OR nox OR ldplayer) AND ("rhythm game" OR "music game")',
+            '("mobile game" OR "android game") AND (emulator backup OR emulator snapshot)',
+          ]
+          def get(url,t=60):
+            req=urllib.request.Request(url,headers={'User-Agent':UA,'Accept':'application/json'})
+            with urllib.request.urlopen(req,timeout=t) as r:return r.read()
+          docs={}
+          searches=[]
+          for q in queries:
+            p=urllib.parse.urlencode({'q':q,'fl[]':'identifier,title,description,subject,creator,mediatype,collection,date,publicdate,downloads','rows':300,'page':1,'output':'json'})
+            u='https://archive.org/advancedsearch.php?'+p
+            try:o=json.loads(get(u)); searches.append({'query':q,'numFound':o.get('response',{}).get('numFound',0)}); docs.update({d['identifier']:d for d in o.get('response',{}).get('docs',[]) if d.get('identifier')})
+            except Exception as e:searches.append({'query':q,'error':str(e)})
+          def inspect(pair):
+            ident,doc=pair
+            try:
+              obj=json.loads(get('https://archive.org/metadata/'+urllib.parse.quote(ident),75)); (M/(ident+'.json')).write_text(json.dumps(obj,ensure_ascii=False))
+              files=obj.get('files',[]); names=[str(f.get('name','')) for f in files]; meta=obj.get('metadata',{})
+              disks=[n for n in names if re.search(r'(?i)(data\.vhdx|userdata-qemu\.img|\.qcow2$|\.vmdk$|\.vdi$|\.ova$|\.ovf$|\.img$|\.tib$|\.ab$)',n)]
+              backups=[n for n in names if re.search(r'(?i)(bluestacks|bignox|nox|ldplayer|leidian|mumu|titanium|swift.?backup|neo.?backup|snapshot|backup)',n)]
+              text=(json.dumps(meta,ensure_ascii=False)+' '+json.dumps(doc,ensure_ascii=False)).lower()
+              game_terms=[x for x in ['rhythm','music game','mobile game','android game','arcaea','lanota','voez','sevens code','seven\'s code','セブンスコード'] if x in text]
+              years=[]
+              for value in [meta.get('date'),meta.get('publicdate'),doc.get('date'),doc.get('publicdate')]:
+                if value:
+                  m=re.search(r'(20\d{2})',str(value));
+                  if m:years.append(int(m.group(1)))
+              return {'identifier':ident,'title':meta.get('title') or doc.get('title'),'description':meta.get('description') or doc.get('description'),'creator':meta.get('creator') or doc.get('creator'),'date':meta.get('date') or doc.get('date'),'mediatype':meta.get('mediatype') or doc.get('mediatype'),'file_count':len(files),'disk_files':disks,'backup_named_files':backups,'game_terms':game_terms,'years':years,'url':'https://archive.org/details/'+ident}
+            except Exception as e:return {'identifier':ident,'error':str(e)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:items=list(ex.map(inspect,docs.items()))
+          disk=[x for x in items if x.get('disk_files')]
+          named=[x for x in items if x.get('backup_named_files') or x.get('game_terms')]
+          priority=[x for x in items if x.get('disk_files') and (x.get('game_terms') or any(2018<=y<=2023 for y in x.get('years',[])))]
+          for name,obj in [('searches',searches),('items',items),('disk_items',disk),('named_items',named),('priority_items',priority)]:
+            (O/(name+'.json')).write_text(json.dumps(obj,ensure_ascii=False,indent=2))
+          summary={'queries':searches,'unique_items':len(items),'items_with_disk_images':len(disk),'items_with_backup_names_or_game_terms':len(named),'priority_items':len(priority)}
+          (O/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sevens-code-ia-emulator-snapshot-catalog
+          path: result/
+          retention-days: 14

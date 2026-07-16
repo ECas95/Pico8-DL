@@ -1,0 +1,79 @@
+name: Deep inspect public Nox backups
+
+on:
+  push:
+    branches:
+      - sevens-code-lookup
+    paths:
+      - .github/workflows/deep-inspect-nox-backups.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deep-inspect-nox-backups.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Inspect nested archives and VMDK read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result/nested result/mounts
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full qemu-utils util-linux e2fsprogs >/dev/null
+          enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+
+          curl -L --fail --retry 4 --max-time 1200 \
+            -o result/nox-backups.rar \
+            "https://archive.org/download/nox-backups/$(enc 'nox-backups.rar')"
+          7z x -y result/nox-backups.rar -oresult/nested > result/outer-extract.log
+          find result/nested -maxdepth 1 -type f -printf '%f\t%s\n' | sort > result/nested-inventory.tsv
+          for f in result/nested/*; do
+            [ -f "$f" ] || continue
+            echo "===== $f ====="
+            file "$f"
+            7z l -slt "$f" || true
+          done > result/nested-listings.txt 2>result/nested-listings-error.txt
+
+          curl -L --fail --retry 4 --max-time 1200 \
+            -o result/BackupNoxPlayer.vmdk \
+            "https://archive.org/download/BackupNoxPlayer/$(enc 'Backup Nox Player.vmdk')"
+          qemu-img info result/BackupNoxPlayer.vmdk > result/vmdk-info.txt
+          sudo modprobe nbd max_part=16
+          sudo qemu-nbd --read-only --connect=/dev/nbd0 result/BackupNoxPlayer.vmdk
+          sleep 3
+          lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS /dev/nbd0 > result/lsblk.txt || true
+          sudo fdisk -l /dev/nbd0 > result/fdisk.txt 2>&1 || true
+          sudo blkid /dev/nbd0* > result/blkid.txt 2>&1 || true
+
+          : > result/filesystem-findings.txt
+          for dev in /dev/nbd0p* /dev/nbd0; do
+            [ -b "$dev" ] || continue
+            name=$(basename "$dev")
+            mnt="result/mounts/$name"
+            mkdir -p "$mnt"
+            if sudo mount -o ro,noload "$dev" "$mnt" 2>"result/mount-${name}.error"; then
+              echo "===== $dev =====" >> result/filesystem-findings.txt
+              sudo find "$mnt" -maxdepth 4 -type d \( -path '*/data/app*' -o -path '*/data/data*' -o -path '*/data/user*' -o -path '*/Android/data*' -o -path '*/mnt/shared*' \) -print >> result/filesystem-findings.txt 2>/dev/null || true
+              sudo find "$mnt" -maxdepth 7 -type d -regextype posix-extended -regex '.*/(data/(app|data|user/0)|Android/data)/[^/]+' -printf '%p\n' >> result/filesystem-findings.txt 2>/dev/null || true
+              sudo find "$mnt" -maxdepth 6 -type f \( -name packages.xml -o -name packages.list -o -name '*.apk' \) -printf '%p\t%s\n' >> result/filesystem-findings.txt 2>/dev/null || true
+              sudo umount "$mnt"
+            fi
+          done
+          sudo qemu-nbd --disconnect /dev/nbd0
+
+          rm -rf result/nox-backups.rar result/BackupNoxPlayer.vmdk result/nested result/mounts
+          find result -maxdepth 1 -type f -printf '%f\t%s\n' | sort > result/inventory.tsv
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deep-nox-backup-inspection
+          path: result/
+          if-no-files-found: error
+          retention-days: 14

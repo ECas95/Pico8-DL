@@ -1,0 +1,75 @@
+name: SEVEN'S CODE fast lookup
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run parallel lookups
+        shell: bash
+        run: |
+          set +e
+          mkdir -p result/raw
+
+          fetch() {
+            name="$1"
+            url="$2"
+            curl -A 'Mozilla/5.0' -L --compressed --connect-timeout 10 --max-time 35 -sS "$url" \
+              -o "result/raw/$name" 2>>result/errors.txt
+          }
+
+          fetch apple_en.json 'https://itunes.apple.com/search?term=SEVEN%27S%20CODE&country=jp&entity=software&limit=200' &
+          fetch apple_ja.json 'https://itunes.apple.com/search?term=%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89&country=jp&entity=software&limit=200' &
+          fetch apple_applibot.json 'https://itunes.apple.com/search?term=Applibot&country=jp&entity=software&limit=200' &
+          fetch ddg_en.html 'https://html.duckduckgo.com/html/?q=%22SEVEN%27S+CODE%22+%22apps.apple.com%22' &
+          fetch ddg_ja.html 'https://html.duckduckgo.com/html/?q=%22%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89%22+%22apps.apple.com%22' &
+          fetch jina_google_en.txt 'https://r.jina.ai/http://www.google.com/search?q=%22SEVEN%27S%20CODE%22+%22apps.apple.com%22' &
+          fetch jina_google_ja.txt 'https://r.jina.ai/http://www.google.com/search?q=%22%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89%22+%22apps.apple.com%22' &
+          fetch wayback_apps.json 'https://web.archive.org/cdx/search/cdx?url=apps.apple.com/jp/app/*sevens*code*/id*&output=json&fl=timestamp,original,statuscode,mimetype,digest&filter=statuscode:200&collapse=urlkey' &
+          fetch wayback_itunes.json 'https://web.archive.org/cdx/search/cdx?url=itunes.apple.com/jp/app/*sevens*code*/id*&output=json&fl=timestamp,original,statuscode,mimetype,digest&filter=statuscode:200&collapse=urlkey' &
+          fetch cc_apps.json 'https://index.commoncrawl.org/CC-MAIN-2021-49-index?url=apps.apple.com/jp/app/*sevens*code*&output=json' &
+          wait
+
+          grep -RhaoE 'https?://([^"<> ]*\.)?(apps|itunes)\.apple\.com/[^"<> ]+' result/raw \
+            | sed 's/&amp;/\&/g' | sort -u > result/apple-urls.txt
+          grep -RhaoE '(^|[^0-9])(id)?[0-9]{8,12}([^0-9]|$)' result/raw \
+            | grep -oE '[0-9]{8,12}' | sort -u > result/numeric-id-candidates.txt
+          grep -RhaiE -C 4 "SEVEN.?S.?CODE|SEVENS.?CODE|セブンスコード|Applibot|アプリボット" result/raw \
+            > result/relevant-lines.txt
+
+          python3 - <<'PY'
+          import json, pathlib, re
+          out=[]
+          for p in pathlib.Path('result/raw').glob('apple*.json'):
+              try:
+                  data=json.loads(p.read_text(errors='replace'))
+              except Exception:
+                  continue
+              for r in data.get('results',[]):
+                  text=' '.join(str(r.get(k,'')) for k in ('trackName','artistName','bundleId','trackViewUrl'))
+                  if re.search(r"seven.?s.?code|sevens.?code|セブンスコード|applibot", text, re.I):
+                      out.append({k:r.get(k) for k in ('trackId','trackName','bundleId','artistName','version','trackViewUrl')})
+          pathlib.Path('result/apple-matches.json').write_text(json.dumps(out,ensure_ascii=False,indent=2))
+          summary = {
+              'apple_matches': out,
+              'apple_urls': pathlib.Path('result/apple-urls.txt').read_text(errors='replace').splitlines(),
+              'numeric_candidates': pathlib.Path('result/numeric-id-candidates.txt').read_text(errors='replace').splitlines(),
+          }
+          pathlib.Path('result/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sevens-code-fast-lookup
+          path: result
+          if-no-files-found: error

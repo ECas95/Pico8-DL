@@ -1,0 +1,115 @@
+name: Fast concurrent 4PDA search
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/search-4pda-fast-concurrent.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Run concurrent high-value searches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet requests beautifulsoup4 lxml
+          mkdir -p result/raw
+          python3 - <<'PY'
+          import concurrent.futures, csv, hashlib, html, json, pathlib, re, urllib.parse
+          import requests
+          from bs4 import BeautifulSoup
+
+          OUT=pathlib.Path('result'); RAW=OUT/'raw'
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150.0 Safari/537.36'
+          terms=["SEVEN'S CODE",'SEVENS CODE','セブンスコード','jp.co.applibot.ghmabgzaxkx','octocacheevai','octo.abot.sh','files/octo','trdhaul6gig46gt4','резервная копия Nox','бэкап Nox','npbk','резервная копия LDPlayer','ldbk','резервная копия BlueStacks','Data.vhdx BlueStacks','бэкап MEmu','полный кэш игры','кэш игры с сервера','закрытая мобильная игра архив','музыкальная игра Android','кэш ритм игры']
+          exact=['jp.co.applibot.ghmabgzaxkx','octocacheevai','octo.abot.sh','files/octo','trdhaul6gig46gt4',"seven's code",'sevens code','セブンスコード']
+          headers={'User-Agent':UA,'Accept-Language':'ru-RU,ru;q=0.9,en;q=0.6'}
+          def cp(t):
+            try:return urllib.parse.quote_from_bytes(t.encode('cp1251'))
+            except:return urllib.parse.quote(t,safe='')
+          def get(url):
+            try:
+              r=requests.get(url,headers=headers,timeout=18,allow_redirects=True)
+              for enc in ['windows-1251','cp1251','utf-8']:
+                try:
+                  text=r.content.decode(enc)
+                  if '�' not in text[:1000]:break
+                except:continue
+              else:text=r.content.decode('utf-8','replace')
+              return {'url':url,'status':r.status_code,'final':r.url,'bytes':len(r.content),'text':text}
+            except Exception as e:return {'url':url,'error':repr(e),'text':''}
+          jobs=[]
+          for t in terms:
+            for host in ['4pda.to','4pda.ru']:
+              jobs.append(('internal',t,f'https://{host}/forum/index.php?act=search&result=posts&sort=dd&source=all&query={cp(t)}&subforums=1&noform=1&st=0&exclude_trash=1'))
+            for domain in ['4pda.to','4pda.ru']:
+              q=urllib.parse.quote_plus(f'site:{domain}/forum "{t}"')
+              jobs.append(('bing',t,f'https://www.bing.com/search?format=rss&q={q}'))
+              jobs.append(('google_jina',t,f'https://r.jina.ai/http://www.google.com/search?q={q}'))
+          rows=[];links=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=18) as ex:
+            futs={ex.submit(get,u):(kind,t,u) for kind,t,u in jobs}
+            for fut in concurrent.futures.as_completed(futs):
+              kind,t,u=futs[fut];r=fut.result();text=r.pop('text','');found=set()
+              if kind=='internal':
+                soup=BeautifulSoup(text,'lxml')
+                for a in soup.find_all('a',href=True):
+                  h=urllib.parse.urljoin(r.get('final',u),html.unescape(a['href']))
+                  if '4pda.' in h and ('showtopic=' in h or 'view=findpost' in h):found.add(h)
+              else:
+                for x in re.findall(r'https?://[^\s\"\'<>\]\)]+',html.unescape(text),re.I):
+                  x=urllib.parse.unquote(x);m=re.search(r'https?://4pda\.(?:to|ru)/forum/[^\s\"\'<>\]\)]+',x,re.I)
+                  if m:found.add(m.group(0).rstrip('.,;:&'))
+              for h in found:links.append({'source':kind,'query':t,'url':h})
+              blocked=bool(re.search(r'403 Forbidden|Access denied|Cloudflare|Доступ ограничен|captcha',text,re.I))
+              key=hashlib.sha1((kind+t+u).encode()).hexdigest()[:14];(RAW/f'{key}.txt').write_text(text,encoding='utf-8',errors='replace')
+              rows.append({'kind':kind,'query':t,'status':r.get('status',''),'bytes':r.get('bytes',''),'final':r.get('final',''),'error':r.get('error',''),'blocked':blocked,'links':len(found)})
+          unique=[];seen=set();tids=set()
+          for x in links:
+            u=urllib.parse.unquote(html.unescape(x['url']));k=(x['source'],x['query'],u)
+            if k in seen:continue
+            seen.add(k);m=re.search(r'(?:showtopic=|[?&]t=)(\d+)',u);x={'source':x['source'],'query':x['query'],'url':u,'topic_id':m.group(1) if m else ''};unique.append(x)
+            if m:tids.add(m.group(1))
+          def fetch_topic(tid):
+            best='';besturl='';statuses=[]
+            for u in [f'https://4pda.to/forum/lofiversion/index.php?t={tid}',f'https://4pda.ru/forum/lofiversion/index.php?t={tid}',f'https://4pda.to/forum/index.php?act=Print&client=printer&f=0&t={tid}']:
+              r=get(u);statuses.append(str(r.get('status','ERR'))+':'+str(r.get('bytes',0)));text=r.get('text','')
+              if r.get('status')==200 and len(text)>len(best) and not re.search(r'403 Forbidden|Access denied|Cloudflare|captcha',text,re.I):best=text;besturl=r.get('final',u)
+            if not best:return {'topic_id':tid,'accessible':False,'statuses':'|'.join(statuses)},[],[]
+            soup=BeautifulSoup(best,'lxml');title=soup.title.get_text(' ',strip=True) if soup.title else '';visible=soup.get_text(' ',strip=True);low=visible.lower();hits=[k for k in exact if k in low];general=[k for k in ['резервная копия','бэкап','полный кэш','данные игры','ритм','музыкаль','npbk','ldbk','data.vhdx'] if k in low];urls=set(urllib.parse.urljoin(besturl,html.unescape(a['href'])) for a in soup.find_all('a',href=True));atts=[];mir=[]
+            for u in urls:
+              if '/forum/dl/post/' in u:atts.append({'topic_id':tid,'title':title,'url':u})
+              elif any(h in u.lower() for h in ['mega.nz','drive.google.com','disk.yandex','yadi.sk','cloud.mail.ru','mediafire.com','pan.baidu.com','123pan','123865.com','t.me/','magnet:?']):mir.append({'topic_id':tid,'title':title,'source':besturl,'url':u})
+            return {'topic_id':tid,'accessible':True,'url':besturl,'title':title,'chars':len(visible),'score':len(hits)*10+len(general),'exact_hits':' | '.join(hits),'general_hits':' | '.join(general),'statuses':'|'.join(statuses)},atts,mir
+          topics=[];atts=[];mir=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+            for topic,a,m in ex.map(fetch_topic,sorted(tids,key=int)):
+              topics.append(topic);atts+=a;mir+=m
+          def dedupe(rs,ks):
+            o=[];s=set()
+            for r in rs:
+              k=tuple(r.get(x,'') for x in ks)
+              if k not in s:s.add(k);o.append(r)
+            return o
+          atts=dedupe(atts,['topic_id','url']);mir=dedupe(mir,['topic_id','url'])
+          def w(name,rs):
+            flds=sorted({k for r in rs for k in r}) if rs else ['empty']
+            with (OUT/name).open('w',newline='',encoding='utf-8-sig') as f:
+              z=csv.DictWriter(f,fieldnames=flds,extrasaction='ignore');z.writeheader();z.writerows(rs)
+          w('requests.csv',rows);w('links.csv',unique);w('topics.csv',sorted(topics,key=lambda x:-int(x.get('score',0) or 0)));w('attachments.csv',atts);w('mirrors.csv',mir)
+          summary={'requests':len(rows),'http_200':sum(r.get('status')==200 for r in rows),'blocked':sum(bool(r.get('blocked')) for r in rows),'links':len(unique),'topic_ids':len(tids),'accessible_topics':sum(bool(t.get('accessible')) for t in topics),'attachments':len(atts),'mirrors':len(mir),'exact_topics':[t for t in topics if t.get('exact_hits')]}
+          (OUT/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8');(OUT/'README.md').write_text('# Fast 4PDA search\n\n'+json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8');print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 4pda-fast-results
+          path: result/
+          if-no-files-found: error
+          retention-days: 14

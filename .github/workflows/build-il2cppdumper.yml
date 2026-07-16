@@ -1,0 +1,47 @@
+name: Build Il2CppDumper Linux
+
+on:
+  push:
+    branches:
+      - sevens-code-lookup
+    paths:
+      - .github/workflows/build-il2cppdumper.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-il2cppdumper.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download source
+        run: |
+          curl -L --fail --retry 3 -o source.zip https://github.com/Perfare/Il2CppDumper/archive/refs/tags/v6.7.46.zip
+          unzip -q source.zip
+          mv Il2CppDumper-6.7.46 src
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Inspect projects
+        run: find src -name '*.csproj' -print
+
+      - name: Publish self-contained
+        run: |
+          PROJECT=$(find src -name 'Il2CppDumper.csproj' | head -1)
+          echo "Project: $PROJECT"
+          dotnet publish "$PROJECT" -c Release -f net7.0 -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out
+          chmod +x out/Il2CppDumper || true
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: il2cppdumper-linux-x64
+          path: out/
+          retention-days: 7

@@ -1,0 +1,141 @@
+name: Mobile game emulator backup search
+
+on:
+  push:
+    branches:
+      - sevens-code-lookup
+    paths:
+      - .github/workflows/mobile-game-emulator-backup-search.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/mobile-game-emulator-backup-search.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Search public backup repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result/metadata
+          python3 - <<'PY'
+          import concurrent.futures, json, pathlib, re, urllib.parse, urllib.request
+
+          OUT=pathlib.Path('result')
+          META=OUT/'metadata'
+          UA='Mozilla/5.0 mobile-game-preservation-research'
+
+          queries=[
+            'title:("Nox Backup")',
+            'description:("Nox Android emulator backup")',
+            '(nox AND backup AND android AND game)',
+            'title:(LDPlayer AND Backup)',
+            '(ldplayer AND backup)',
+            '(memu AND (backup OR image OR ova))',
+            '(bluestacks AND (backup OR image OR vhdx))',
+            'description:("server-side files")',
+            'description:("server downloaded")',
+            'description:("downloaded files" AND emulator)',
+            '("mobile game" AND emulator AND backup)',
+            '("android game" AND emulator AND backup)',
+            '("rhythm game" AND (backup OR emulator OR snapshot))',
+            '("music game" AND (backup OR emulator OR snapshot))',
+            '("Final Fantasy VII The First SOLDIER" OR "Dragalia Lost" OR "World Flipper" OR "Tales of Crestoria" OR "Princess Connect" OR "Love Live" OR D4DJ OR Cytus OR DEEMO OR Arcaea OR Lanota OR VOEZ OR "Project Sekai" OR "BanG Dream") AND (backup OR emulator OR snapshot)',
+          ]
+
+          def get(url,timeout=75):
+            req=urllib.request.Request(url,headers={'User-Agent':UA,'Accept':'*/*'})
+            with urllib.request.urlopen(req,timeout=timeout) as r:
+              return r.read()
+
+          docs={}
+          search_summary=[]
+          for i,q in enumerate(queries):
+            params=urllib.parse.urlencode({
+              'q':q,'fl[]':'identifier,title,description,subject,creator,mediatype,date,downloads',
+              'rows':500,'page':1,'output':'json'
+            })
+            try:
+              data=json.loads(get('https://archive.org/advancedsearch.php?'+params))
+              found=data.get('response',{}).get('numFound',0)
+              rows=data.get('response',{}).get('docs',[])
+              search_summary.append({'query':q,'numFound':found,'returned':len(rows)})
+              for d in rows:
+                if d.get('identifier'): docs[d['identifier']]=d
+            except Exception as exc:
+              search_summary.append({'query':q,'error':str(exc)})
+
+          def inspect(ident):
+            try:
+              raw=get('https://archive.org/metadata/'+urllib.parse.quote(ident))
+              (META/f'{ident}.json').write_bytes(raw)
+              obj=json.loads(raw)
+              md=obj.get('metadata',{})
+              files=obj.get('files',[])
+              selected=[]
+              for f in files:
+                n=str(f.get('name',''))
+                if re.search(r'(?i)(\.npbk$|\.ldbk$|\.vmdk$|\.vhdx$|\.vdi$|\.ova$|\.ovf$|\.qcow2$|\.ab$|\.tib$|\.rar$|\.7z$|\.zip$|backup|snapshot)',n):
+                  selected.append({'name':n,'size':f.get('size'),'format':f.get('format'),'md5':f.get('md5'),'sha1':f.get('sha1')})
+              text=' '.join(str(md.get(k,'')) for k in ('title','description','subject','creator')).lower()
+              game_hits=[g for g in ['rhythm','music game','mobile game','android game','final fantasy','dragalia','world flipper','love live','d4dj','cytus','deemo','arcaea','lanota','voez','project sekai','bang dream'] if g in text]
+              emulator_hits=[e for e in ['nox','bluestacks','ldplayer','memu','mumu','genymotion','android emulator'] if e in text]
+              return {'identifier':ident,'title':md.get('title'),'description':md.get('description'),'subject':md.get('subject'),'creator':md.get('creator'),'date':md.get('date'),'mediatype':md.get('mediatype'),'downloads':md.get('downloads'),'selected_files':selected,'game_hits':game_hits,'emulator_hits':emulator_hits,'url':'https://archive.org/details/'+ident}
+            except Exception as exc:
+              return {'identifier':ident,'error':str(exc)}
+
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            inspected=list(ex.map(inspect,sorted(docs)))
+
+          useful=[x for x in inspected if x.get('selected_files') and (x.get('emulator_hits') or x.get('game_hits'))]
+          game_backups=[x for x in useful if x.get('game_hits')]
+
+          # Other public repository APIs.
+          api_searches={}
+          external=[]
+          for platform,base in [
+            ('huggingface_datasets','https://huggingface.co/api/datasets?limit=100&search='),
+            ('huggingface_models','https://huggingface.co/api/models?limit=100&search='),
+            ('zenodo','https://zenodo.org/api/records?size=100&q='),
+          ]:
+            for term in ['nox backup','bluestacks backup','ldplayer backup','memu backup','android emulator snapshot','mobile game backup','rhythm game backup']:
+              url=base+urllib.parse.quote(term)
+              key=platform+'_'+re.sub(r'\W+','_',term)
+              try:
+                raw=get(url)
+                (OUT/(key+'.json')).write_bytes(raw)
+                obj=json.loads(raw)
+                api_searches[key]={'ok':True,'bytes':len(raw)}
+                if platform=='zenodo':
+                  for hit in obj.get('hits',{}).get('hits',[]):
+                    external.append({'platform':platform,'term':term,'id':hit.get('id'),'title':hit.get('metadata',{}).get('title'),'url':hit.get('links',{}).get('html')})
+                elif isinstance(obj,list):
+                  for hit in obj:
+                    external.append({'platform':platform,'term':term,'id':hit.get('id'),'title':hit.get('id'),'url':'https://huggingface.co/'+('datasets/' if platform.endswith('datasets') else '')+str(hit.get('id',''))})
+              except Exception as exc:
+                api_searches[key]={'ok':False,'error':str(exc)}
+
+          (OUT/'search_summary.json').write_text(json.dumps(search_summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'all_items.json').write_text(json.dumps(inspected,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'useful_items.json').write_text(json.dumps(useful,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'game_backup_items.json').write_text(json.dumps(game_backups,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'external_repository_results.json').write_text(json.dumps(external,ensure_ascii=False,indent=2),encoding='utf-8')
+          (OUT/'external_api_summary.json').write_text(json.dumps(api_searches,ensure_ascii=False,indent=2),encoding='utf-8')
+          summary={'queries':len(queries),'unique_ia_items':len(docs),'useful_items':len(useful),'game_backup_items':len(game_backups),'external_results':len(external)}
+          (OUT/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-game-emulator-backup-search
+          path: result/
+          if-no-files-found: error
+          retention-days: 14

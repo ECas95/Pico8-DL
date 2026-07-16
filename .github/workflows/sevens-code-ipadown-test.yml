@@ -1,0 +1,60 @@
+name: SEVEN'S CODE action-ipadown test
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test Apple lookup endpoints
+        shell: bash
+        run: |
+          set +e
+          mkdir -p result
+          curl -A 'Mozilla/5.0' -L --compressed --connect-timeout 15 --max-time 60 -sS \
+            'https://itunes.apple.com/lookup?id=1424882955&country=jp' \
+            -o result/apple-lookup-1424882955.json 2>result/apple-lookup-error.txt
+          curl -A 'Mozilla/5.0' -I -L --connect-timeout 15 --max-time 60 -sS \
+            'https://www.sevenscode.jp/AppStore' \
+            -o result/official-appstore-redirect-headers.txt 2>result/official-appstore-error.txt
+
+      - name: Run ipatool-py lookup used by action-ipadown
+        shell: bash
+        run: |
+          set +e
+          git clone --depth 1 -b itunes_server https://github.com/NyaMisty/ipatool-py result/ipatool-py \
+            >result/git-clone.log 2>&1
+          python3 -m pip install -r result/ipatool-py/requirements.txt \
+            >result/pip-install.log 2>&1
+
+          cd result/ipatool-py
+          python3 main.py --json lookup --get-verid -i 1424882955 -c JP \
+            > ../ipatool-lookup-by-id.json 2> ../ipatool-lookup-by-id-error.txt
+          python3 main.py --json lookup --get-verid -b jp.co.applibot.ghmabgzaxkx -c JP \
+            > ../ipatool-lookup-android-bundle.json 2> ../ipatool-lookup-android-bundle-error.txt
+          cd ../..
+
+          printf '\n=== Apple lookup ===\n'
+          cat result/apple-lookup-1424882955.json
+          printf '\n=== Official redirect ===\n'
+          cat result/official-appstore-redirect-headers.txt
+          printf '\n=== ipatool lookup by app ID ===\n'
+          cat result/ipatool-lookup-by-id.json
+          cat result/ipatool-lookup-by-id-error.txt
+          printf '\n=== ipatool lookup using Android bundle as control ===\n'
+          cat result/ipatool-lookup-android-bundle.json
+          cat result/ipatool-lookup-android-bundle-error.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sevens-code-ipadown-test
+          path: result
+          if-no-files-found: error
