@@ -1,0 +1,80 @@
+name: Fast non-IA backup search
+
+on:
+  push:
+    branches:
+      - sevens-code-lookup
+    paths:
+      - .github/workflows/fast-non-ia-backup-search.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fast-non-ia-backup-search.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Query non-IA indexes quickly
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result/raw
+          python3 - <<'PY'
+          import concurrent.futures, html, json, pathlib, re, urllib.parse, urllib.request
+          OUT=pathlib.Path('result'); RAW=OUT/'raw'; UA='Mozilla/5.0 preservation-index-search'
+          queries=[
+            '".npbk" game backup','".ldbk" game backup','"Data.vhdx" android game',
+            '"userdata-qemu.img" game backup','"Nox Backup with Server Files"',
+            '"mobile rhythm game" assets mirror','"rhythm game" local server assets',
+            '"music game" server files backup','intitle:"index of" .npbk',
+            'intitle:"index of" .ldbk','intitle:"index of" Data.vhdx',
+            '音游 模拟器 备份 数据包','停服 手游 数据 备份','音ゲー サーバー データ 保存'
+          ]
+          urls={}
+          for i,q in enumerate(queries):
+            e=urllib.parse.quote_plus(q)
+            urls[f'bing_{i}.xml']=f'https://www.bing.com/search?format=rss&q={e}'
+            urls[f'mojeek_{i}.html']=f'https://www.mojeek.com/search?q={e}'
+            urls[f'brave_{i}.html']=f'https://search.brave.com/search?q={e}&source=web'
+            urls[f'reddit_{i}.json']=f'https://www.reddit.com/search.json?q={e}&limit=100&sort=relevance'
+            urls[f'btdig_{i}.html']=f'https://btdig.com/search?q={e}'
+            urls[f'filepursuit_{i}.html']=f'https://filepursuit.com/pursuit?q={e}&type=all'
+            urls[f'mmnt_{i}.html']=f'https://mmnt.ru/int/get?st={e}'
+          def f(kv):
+            n,u=kv
+            try:
+              req=urllib.request.Request(u,headers={'User-Agent':UA,'Accept':'*/*'})
+              with urllib.request.urlopen(req,timeout=18) as r:
+                b=r.read(2_000_000); (RAW/n).write_bytes(b)
+                return {'name':n,'url':u,'status':getattr(r,'status',200),'bytes':len(b),'type':r.headers.get('content-type')}
+            except Exception as e:
+              (RAW/(n+'.error')).write_text(str(e)); return {'name':n,'url':u,'error':str(e)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex: inv=list(ex.map(f,urls.items()))
+          key=re.compile(r'(?i)(\.npbk|\.ldbk|data\.vhdx|userdata-qemu\.img|\.vmdk|\.vdi|\.ova|nox.{0,30}backup|ldplayer.{0,30}backup|server.{0,30}(files|assets|download)|rhythm.{0,30}(assets|backup|server)|music game.{0,30}(assets|backup|server)|音游|停服|音ゲー)')
+          urlr=re.compile(r'(?:https?|ftp)://[^\s"\'<>\\]+',re.I)
+          evidence=[]; links=set()
+          for p in RAW.iterdir():
+            if not p.is_file() or p.name.endswith('.error'): continue
+            t=html.unescape(p.read_text(errors='replace'))
+            for line in t.splitlines():
+              if key.search(line): evidence.append({'source':p.name,'line':line[:5000]})
+            for u in urlr.findall(t):
+              if key.search(u) or any(h in u.lower() for h in ['mega.nz','drive.google.com','pan.baidu.com','123pan','alipan','mediafire','github.com','gitlab','reddit.com','btdig','ftp']): links.add(u.rstrip(').,];&'))
+          (OUT/'inventory.json').write_text(json.dumps(inv,ensure_ascii=False,indent=2))
+          (OUT/'evidence.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2))
+          (OUT/'links.txt').write_text('\n'.join(sorted(links)))
+          summary={'queries':len(queries),'requests':len(inv),'success':sum(1 for x in inv if x.get('status')),'evidence':len(evidence),'links':len(links)}
+          (OUT/'summary.json').write_text(json.dumps(summary,indent=2)); print(summary)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fast-non-ia-backup-search
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
