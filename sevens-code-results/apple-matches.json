@@ -10,30 +10,12 @@
   },
   {
     "source": "apple_applibot.json",
-    "trackId": 6740388983,
-    "trackName": "ハローキティ マーチマッチ",
-    "bundleId": "jp.co.applibot.HelloKittyMerchMatch",
-    "artistName": "Applibot Inc.",
-    "version": "12.0.0",
-    "trackViewUrl": "https://apps.apple.com/jp/app/%E3%83%8F%E3%83%AD%E3%83%BC%E3%82%AD%E3%83%86%E3%82%A3-%E3%83%9E%E3%83%BC%E3%83%81%E3%83%9E%E3%83%83%E3%83%81/id6740388983?uo=4"
-  },
-  {
-    "source": "apple_applibot.json",
     "trackId": 1525508172,
     "trackName": "グリモア～私立グリモワール魔法学園Histoire～",
     "bundleId": "jp.co.applibot.grimoireOfflineMain",
     "artistName": "Applibot Inc.",
     "version": "1.0.2",
     "trackViewUrl": "https://apps.apple.com/jp/app/%E3%82%B0%E3%83%AA%E3%83%A2%E3%82%A2-%E7%A7%81%E7%AB%8B%E3%82%B0%E3%83%AA%E3%83%A2%E3%83%AF%E3%83%BC%E3%83%AB%E9%AD%94%E6%B3%95%E5%AD%A6%E5%9C%92histoire/id1525508172?uo=4"
-  },
-  {
-    "source": "apple_applibot.json",
-    "trackId": 1534695678,
-    "trackName": "グリモア～私立グリモワール魔法学園Mémoire リリィ～",
-    "bundleId": "jp.co.applibot.grimoireOfflineLily",
-    "artistName": "Applibot Inc.",
-    "version": "1.0.2",
-    "trackViewUrl": "https://apps.apple.com/jp/app/%E3%82%B0%E3%83%AA%E3%83%A2%E3%82%A2-%E7%A7%81%E7%AB%8B%E3%82%B0%E3%83%AA%E3%83%A2%E3%83%AF%E3%83%BC%E3%83%AB%E9%AD%94%E6%B3%95%E5%AD%A6%E5%9C%92m%C3%A9moire-%E3%83%AA%E3%83%AA%E3%82%A3/id1534695678?uo=4"
   },
   {
     "source": "apple_applibot.json",
@@ -52,5 +34,23 @@
     "artistName": "Applibot Inc.",
     "version": "1.0.2",
     "trackViewUrl": "https://apps.apple.com/jp/app/%E3%82%B0%E3%83%AA%E3%83%A2%E3%82%A2-%E7%A7%81%E7%AB%8B%E3%82%B0%E3%83%AA%E3%83%A2%E3%83%AF%E3%83%BC%E3%83%AB%E9%AD%94%E6%B3%95%E5%AD%A6%E5%9C%92m%C3%A9moire-%E3%83%AD%E3%83%BC%E3%82%BA/id1534664917?uo=4"
+  },
+  {
+    "source": "apple_applibot.json",
+    "trackId": 1534695678,
+    "trackName": "グリモア～私立グリモワール魔法学園Mémoire リリィ～",
+    "bundleId": "jp.co.applibot.grimoireOfflineLily",
+    "artistName": "Applibot Inc.",
+    "version": "1.0.2",
+    "trackViewUrl": "https://apps.apple.com/jp/app/%E3%82%B0%E3%83%AA%E3%83%A2%E3%82%A2-%E7%A7%81%E7%AB%8B%E3%82%B0%E3%83%AA%E3%83%A2%E3%83%AF%E3%83%BC%E3%83%AB%E9%AD%94%E6%B3%95%E5%AD%A6%E5%9C%92m%C3%A9moire-%E3%83%AA%E3%83%AA%E3%82%A3/id1534695678?uo=4"
+  },
+  {
+    "source": "apple_applibot.json",
+    "trackId": 6740388983,
+    "trackName": "ハローキティ マーチマッチ",
+    "bundleId": "jp.co.applibot.HelloKittyMerchMatch",
+    "artistName": "Applibot Inc.",
+    "version": "12.0.0",
+    "trackViewUrl": "https://apps.apple.com/jp/app/%E3%83%8F%E3%83%AD%E3%83%BC%E3%82%AD%E3%83%86%E3%82%A3-%E3%83%9E%E3%83%BC%E3%83%81%E3%83%9E%E3%83%83%E3%83%81/id6740388983?uo=4"
   }
 ]
