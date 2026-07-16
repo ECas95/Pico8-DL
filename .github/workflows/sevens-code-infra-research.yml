@@ -1,4 +1,4 @@
-name: SEVEN'S CODE deep online search
+name: SEVEN'S CODE targeted preservation search
 
 on:
   pull_request:
@@ -14,98 +14,45 @@ jobs:
   research:
     runs-on: ubuntu-latest
     steps:
-      - name: Query archives, search engines and communities
+      - name: Inspect archives and player uploads
         shell: bash
         run: |
           set +e
-          mkdir -p result/raw
+          mkdir -p result/raw result/parsed
+          python3 -m pip install --quiet yt-dlp
+
           python3 - <<'PY'
-          import concurrent.futures, json, pathlib, re, urllib.parse, urllib.request
+          import concurrent.futures, csv, json, pathlib, re, urllib.parse, urllib.request
 
           OUT = pathlib.Path('result')
           RAW = OUT / 'raw'
-          ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SEVENS-CODE-preservation'
+          PARSED = OUT / 'parsed'
+          UA = 'Mozilla/5.0 SEVENS-CODE-preservation'
 
-          exact_terms = [
-              'octocacheevai',
-              'jp.co.applibot.ghmabgzaxkx',
-              'octo.abot.sh',
-              'seven-scode.appspot.com',
-              "SEVEN'S CODE",
-              'SEVENS CODE',
-              'セブンスコード',
-          ]
-
-          search_queries = [
-              '"octocacheevai"',
-              '"jp.co.applibot.ghmabgzaxkx" backup cache data',
-              '"SEVEN\'S CODE" backup cache dump assets',
-              '"SEVEN\'S CODE" "Android/data"',
-              '"SEVEN\'S CODE" "Google Drive" OR MEGA OR MediaFire',
-              '"SEVEN\'S CODE" 百度网盘 OR 夸克网盘 OR 阿里云盘',
-              '"SEVEN\'S CODE" 数据包 OR 资源包 OR 全曲',
-              'セブンスコード バックアップ キャッシュ データ',
-              'セブンスコード サービス終了 保存 端末',
-              'SEVENS CODE private server preservation assets',
-              'SEVENS CODE Sonolus simulator chart data',
-          ]
-
-          urls = {}
-          def add(name, url):
-              urls[name] = url
-
-          # Internet Archive metadata search.
-          for i, term in enumerate(exact_terms):
-              params = urllib.parse.urlencode({
-                  'q': f'"{term}"',
+          urls = {
+              'ia_wiki_metadata.json': 'https://archive.org/metadata/wiki-sevens_codefandomcom',
+              'ia_extravatorz_metadata.json': 'https://archive.org/metadata/extravatorz_archive',
+              'ia_subject_search.json': 'https://archive.org/advancedsearch.php?' + urllib.parse.urlencode({
+                  'q': 'subject:"Sevens Code" OR subject:"SEVEN\'S CODE" OR title:"SEVEN\'S CODE"',
                   'fl[]': 'identifier,title,description,subject,mediatype,collection',
-                  'rows': 200,
-                  'page': 1,
-                  'output': 'json',
-              })
-              add(f'ia_{i}.json', 'https://archive.org/advancedsearch.php?' + params)
+                  'rows': 500, 'page': 1, 'output': 'json'}),
+          }
 
-          # Search engines and file-share discovery.
-          for i, q in enumerate(search_queries):
-              enc = urllib.parse.quote_plus(q)
-              add(f'ddg_{i}.html', f'https://html.duckduckgo.com/html/?q={enc}')
-              add(f'bing_{i}.xml', f'https://www.bing.com/search?format=rss&q={enc}')
-              add(f'jina_google_{i}.txt', f'https://r.jina.ai/http://www.google.com/search?q={enc}')
+          nico_fields = 'contentId,title,description,tags,startTime,userId,channelId,viewCounter,thumbnailUrl'
+          for i, q in enumerate(["SEVEN'S CODE", 'SEVENS CODE', 'セブンスコード', 'セブンスコード サービス終了']):
+              urls[f'niconico_{i}.json'] = 'https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search?' + urllib.parse.urlencode({
+                  'q': q, 'targets': 'title,description,tags', 'fields': nico_fields,
+                  '_sort': '-startTime', '_limit': 100, '_context': 'sevens-code-preservation'})
 
-          # Community search APIs.
-          for i, q in enumerate(["SEVEN'S CODE", 'SEVENS CODE', 'セブンスコード']):
-              enc = urllib.parse.quote(q)
-              add(f'reddit_{i}.json', f'https://www.reddit.com/search.json?q={enc}&limit=100&sort=relevance')
-              add(f'niconico_{i}.json', 'https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search?'
-                  + urllib.parse.urlencode({'q': q, 'targets': 'title,description,tags', '_sort': '-startTime', '_limit': 100}))
-              add(f'bilibili_{i}.json', 'https://api.bilibili.com/x/web-interface/search/type?'
-                  + urllib.parse.urlencode({'search_type': 'video', 'keyword': q, 'page': 1}))
-
-          # Wayback and Common Crawl URL-level searches.
-          cdx_patterns = [
-              'octo.abot.sh/*',
-              'seven-scode.firebaseio.com/*',
-              'storage.googleapis.com/seven-scode.appspot.com/*',
-              'www.sevenscode.jp/*',
-              'sevenscode.jp/*',
-          ]
-          for i, pat in enumerate(cdx_patterns):
-              add(f'cdx_{i}.json', 'https://web.archive.org/cdx/search/cdx?' + urllib.parse.urlencode({
-                  'url': pat, 'output': 'json',
-                  'fl': 'timestamp,original,statuscode,mimetype,digest,length',
-                  'filter': 'statuscode:200', 'collapse': 'urlkey',
-              }))
-
-          for crawl in ['CC-MAIN-2020-50','CC-MAIN-2021-49','CC-MAIN-2022-49','CC-MAIN-2023-50','CC-MAIN-2024-51']:
-              for i, pat in enumerate(cdx_patterns[:4]):
-                  add(f'cc_{crawl}_{i}.json', f'https://index.commoncrawl.org/{crawl}-index?'
-                      + urllib.parse.urlencode({'url': pat, 'output': 'json'}))
+          # The long-running community thread, including several pages.
+          for page in range(1, 31):
+              urls[f'ziv_{page:02}.html'] = f'https://zenius-i-vanisher.com/v5.2/thread?threadid=10047&page={page}'
 
           def fetch(item):
               name, url = item
-              req = urllib.request.Request(url, headers={'User-Agent': ua, 'Accept': '*/*'})
+              req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': '*/*'})
               try:
-                  with urllib.request.urlopen(req, timeout=70) as r:
+                  with urllib.request.urlopen(req, timeout=60) as r:
                       data = r.read()
                       (RAW / name).write_bytes(data)
                       return {'name': name, 'url': url, 'status': getattr(r, 'status', 200),
@@ -114,63 +61,109 @@ jobs:
                   (RAW / (name + '.error')).write_text(str(exc), encoding='utf-8')
                   return {'name': name, 'url': url, 'error': str(exc)}
 
-          with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-              inventory = list(ex.map(fetch, urls.items()))
-          (OUT / 'inventory.json').write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding='utf-8')
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+              inv = list(ex.map(fetch, urls.items()))
+          (OUT / 'inventory.json').write_text(json.dumps(inv, ensure_ascii=False, indent=2), encoding='utf-8')
 
-          # Parse all downloaded text for candidate links and exact evidence.
-          link_re = re.compile(r'https?://[^\s"\'<>\\]+', re.I)
-          candidates = set()
-          evidence = []
-          hosts_of_interest = ('archive.org','drive.google.com','docs.google.com','mega.nz','mediafire.com',
-                               'pan.baidu.com','cloud.189.cn','lanzou','aliyundrive','alipan.com','123pan.com',
-                               'bilibili.com','reddit.com','nicovideo.jp','github.com','discord.gg','t.me')
-          keywords = ('octocacheevai','jp.co.applibot.ghmabgzaxkx','seven\'s code','sevens code',
-                      'セブンスコード','files/octo','android/data')
-          for p in RAW.iterdir():
-              if not p.is_file() or p.name.endswith('.error'):
-                  continue
-              text = p.read_text(errors='replace')
-              low = text.lower()
-              if any(k.lower() in low for k in keywords):
-                  for line in text.splitlines():
-                      ll = line.lower()
-                      if any(k.lower() in ll for k in keywords):
-                          evidence.append({'source': p.name, 'line': line[:2000]})
-              for u in link_re.findall(text):
-                  ul = u.lower().rstrip(').,]')
-                  if any(h in ul for h in hosts_of_interest):
-                      candidates.add(u.rstrip(').,]'))
-
-          (OUT / 'candidate_links.txt').write_text('\n'.join(sorted(candidates)), encoding='utf-8')
-          (OUT / 'evidence.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
-
-          # Summarize Internet Archive results separately.
-          ia_docs = []
-          for p in RAW.glob('ia_*.json'):
+          # Parse Internet Archive item file lists.
+          for item in ['wiki', 'extravatorz']:
+              p = RAW / f'ia_{item}_metadata.json'
               try:
                   data = json.loads(p.read_text(errors='replace'))
-                  for d in data.get('response', {}).get('docs', []):
-                      d['_source'] = p.name
-                      ia_docs.append(d)
               except Exception:
-                  pass
-          (OUT / 'internet_archive_matches.json').write_text(json.dumps(ia_docs, ensure_ascii=False, indent=2), encoding='utf-8')
+                  continue
+              files = data.get('files', [])
+              with (PARSED / f'{item}_files.csv').open('w', newline='', encoding='utf-8-sig') as f:
+                  w = csv.writer(f)
+                  w.writerow(['name','size','format','md5','sha1','source'])
+                  for x in files:
+                      w.writerow([x.get('name'), x.get('size'), x.get('format'), x.get('md5'), x.get('sha1'), x.get('source')])
+              interesting = []
+              for x in files:
+                  name = str(x.get('name',''))
+                  low = name.lower()
+                  if any(k in low for k in ('seven','code','wiki','xml','json','sqlite','zip','7z','apk','obb','tar','mp4','webm')):
+                      interesting.append(x)
+              (PARSED / f'{item}_interesting_files.json').write_text(json.dumps(interesting, ensure_ascii=False, indent=2), encoding='utf-8')
+              (PARSED / f'{item}_metadata_summary.json').write_text(json.dumps({
+                  'metadata': data.get('metadata', {}), 'file_count': len(files),
+                  'interesting_count': len(interesting)}, ensure_ascii=False, indent=2), encoding='utf-8')
 
-          summary = {
-              'requests': len(inventory),
-              'successful': sum(1 for x in inventory if 'status' in x),
-              'candidate_links': len(candidates),
-              'evidence_lines': len(evidence),
-              'internet_archive_documents': len(ia_docs),
+          # Parse Niconico results and rank videos whose descriptions imply complete captures/data retention.
+          nico = []
+          for p in RAW.glob('niconico_*.json'):
+              try:
+                  data = json.loads(p.read_text(errors='replace'))
+              except Exception:
+                  continue
+              for x in data.get('data', []):
+                  x['_source'] = p.name
+                  nico.append(x)
+          seen = set(); unique=[]
+          for x in nico:
+              cid=x.get('contentId')
+              if cid and cid not in seen:
+                  seen.add(cid); unique.append(x)
+          keywords = ('全曲','全譜面','全難易度','サ終','サービス終了','保存','アーカイブ','データ','譜面','all song','all chart','archive')
+          for x in unique:
+              text = ' '.join(str(x.get(k,'')) for k in ('title','description','tags')).lower()
+              x['_preservation_score'] = sum(1 for k in keywords if k.lower() in text)
+          unique.sort(key=lambda x:(x.get('_preservation_score',0), x.get('viewCounter',0) or 0), reverse=True)
+          (PARSED / 'niconico_results.json').write_text(json.dumps(unique, ensure_ascii=False, indent=2), encoding='utf-8')
+
+          # Extract useful lines and external links from the ZIV thread.
+          ziv_lines=[]; ziv_links=set()
+          link_re=re.compile(r'https?://[^\s"\'<>]+', re.I)
+          for p in RAW.glob('ziv_*.html'):
+              text=p.read_text(errors='replace')
+              plain=re.sub(r'<[^>]+>', ' ', text)
+              plain=re.sub(r'\s+', ' ', plain)
+              for m in re.finditer(r'(?i)(.{0,350}(?:SEVEN.?S CODE|server|asset|data|cache|backup|download|shutdown|offline|dump).{0,500})', plain):
+                  ziv_lines.append({'source':p.name,'text':m.group(1)[:1200]})
+              for u in link_re.findall(text):
+                  if any(h in u.lower() for h in ('drive.google','mega.nz','mediafire','dropbox','github','discord','archive.org','youtube')):
+                      ziv_links.add(u.rstrip(').,]'))
+          (PARSED / 'ziv_relevant_lines.json').write_text(json.dumps(ziv_lines, ensure_ascii=False, indent=2), encoding='utf-8')
+          (PARSED / 'ziv_external_links.txt').write_text('\n'.join(sorted(ziv_links)), encoding='utf-8')
+          PY
+
+          # YouTube flat searches. No media is downloaded.
+          yt-dlp --flat-playlist --dump-single-json 'ytsearch100:SEVEN S CODE rhythm game' > result/raw/youtube_en.json 2> result/raw/youtube_en.error
+          yt-dlp --flat-playlist --dump-single-json 'ytsearch100:SEVEN’S CODE rhythm game' > result/raw/youtube_apostrophe.json 2> result/raw/youtube_apostrophe.error
+          yt-dlp --flat-playlist --dump-single-json 'ytsearch100:セブンスコード 音ゲー' > result/raw/youtube_ja.json 2> result/raw/youtube_ja.error
+          yt-dlp --flat-playlist --dump-single-json 'ytsearch100:セブンスコード 全曲 全譜面' > result/raw/youtube_complete.json 2> result/raw/youtube_complete.error
+
+          python3 - <<'PY'
+          import json, pathlib
+          root=pathlib.Path('result')
+          vids=[]; seen=set()
+          for p in (root/'raw').glob('youtube_*.json'):
+              try:data=json.loads(p.read_text(errors='replace'))
+              except Exception: continue
+              for x in data.get('entries') or []:
+                  if not x: continue
+                  vid=x.get('id')
+                  if vid in seen: continue
+                  seen.add(vid)
+                  vids.append({k:x.get(k) for k in ('id','title','url','channel','channel_id','uploader','uploader_id','duration','view_count')})
+          keywords=('全曲','全譜面','all song','all chart','archive','service end','サ終','サービス終了')
+          for x in vids:
+              t=(x.get('title') or '').lower()
+              x['preservation_score']=sum(1 for k in keywords if k.lower() in t)
+          vids.sort(key=lambda x:(x['preservation_score'],x.get('view_count') or 0),reverse=True)
+          (root/'parsed'/'youtube_results.json').write_text(json.dumps(vids,ensure_ascii=False,indent=2),encoding='utf-8')
+          summary={
+              'youtube_results':len(vids),
+              'niconico_results':len(json.loads((root/'parsed'/'niconico_results.json').read_text())) if (root/'parsed'/'niconico_results.json').exists() else 0,
+              'ziv_relevant_fragments':len(json.loads((root/'parsed'/'ziv_relevant_lines.json').read_text())) if (root/'parsed'/'ziv_relevant_lines.json').exists() else 0,
           }
-          (OUT / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
-          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          (root/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sevens-code-deep-online-search
+          name: sevens-code-targeted-preservation-search
           path: result/
           if-no-files-found: error
           retention-days: 7
