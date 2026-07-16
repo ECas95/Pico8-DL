@@ -23,23 +23,29 @@ jobs:
           ACCEPT='application/x-protobuf,x-octo-app/1'
           UA='Dalvik/2.1.0 (Linux; U; Android 11; SEVENS_CODE)'
 
+          getent ahosts octo.abot.sh > result/dns.txt 2>&1
+          timeout 25 openssl s_client -connect octo.abot.sh:443 -servername octo.abot.sh -showcerts </dev/null \
+            > result/tls.txt 2>&1
+
           fetch() {
             name="$1"
             url="$2"
-            curl -L --connect-timeout 20 --max-time 120 --retry 2 \
+            curl -k -L --connect-timeout 20 --max-time 120 --retry 1 \
               -A "$UA" \
               -H "Accept: $ACCEPT" \
               -H "X-OCTO-KEY: $KEY" \
               -D "result/${name}.headers" \
               -o "result/${name}.bin" \
-              -w '%{http_code}\n%{content_type}\n%{size_download}\n%{url_effective}\n' \
+              -w '%{http_code}\n%{content_type}\n%{size_download}\n%{url_effective}\n%{remote_ip}\n' \
               "$url" > "result/${name}.status" 2> "result/${name}.error"
           }
 
-          fetch revision_102 'https://octo.abot.sh/v1/revision/102'
-          fetch list_102_0 'https://octo.abot.sh/v1/list/102/0'
-          fetch revision_104 'https://octo.abot.sh/v1/revision/104'
-          fetch list_104_0 'https://octo.abot.sh/v1/list/104/0'
+          fetch https_revision_102 'https://octo.abot.sh/v1/revision/102'
+          fetch https_list_102_0 'https://octo.abot.sh/v1/list/102/0'
+          fetch https_revision_104 'https://octo.abot.sh/v1/revision/104'
+          fetch https_list_104_0 'https://octo.abot.sh/v1/list/104/0'
+          fetch http_revision_102 'http://octo.abot.sh/v1/revision/102'
+          fetch http_list_102_0 'http://octo.abot.sh/v1/list/102/0'
 
           find result -type f -maxdepth 1 -printf '%f %s bytes\n' | sort
           for f in result/*.status; do echo "===== $f ====="; cat "$f"; done
