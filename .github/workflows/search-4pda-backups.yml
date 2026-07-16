@@ -1,0 +1,514 @@
+name: Search 4PDA emulator and game backups
+
+on:
+  push:
+    branches:
+      - 4pda-backup-search
+    paths:
+      - .github/workflows/search-4pda-backups.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Search 4PDA internal index and external engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet requests beautifulsoup4 lxml cloudscraper
+          mkdir -p result/raw/internal result/raw/engines result/raw/topics
+
+          cat > /tmp/search_4pda.py <<'PY'
+          from __future__ import annotations
+
+          import csv
+          import hashlib
+          import html
+          import json
+          import pathlib
+          import re
+          import time
+          import urllib.parse
+          from collections import defaultdict
+
+          import requests
+          from bs4 import BeautifulSoup
+
+          try:
+              import cloudscraper
+          except Exception:
+              cloudscraper = None
+
+          ROOT = pathlib.Path("result")
+          RAW_INTERNAL = ROOT / "raw" / "internal"
+          RAW_ENGINES = ROOT / "raw" / "engines"
+          RAW_TOPICS = ROOT / "raw" / "topics"
+
+          UA = (
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/150.0.0.0 Safari/537.36"
+          )
+
+          TERMS = [
+              # Exact SEVEN'S CODE targets
+              "SEVEN'S CODE",
+              "SEVENS CODE",
+              "Seven Code",
+              "セブンスコード",
+              "jp.co.applibot.ghmabgzaxkx",
+              "octocacheevai",
+              "octo.abot.sh",
+              "files/octo",
+              "octo/pdb/1/102",
+              "trdhaul6gig46gt4",
+              "Applibot Seven Code",
+              # Emulator backups
+              "резервная копия Nox",
+              "бэкап Nox",
+              "образ Nox",
+              "Nox backup game",
+              "npbk",
+              "резервная копия LDPlayer",
+              "бэкап LDPlayer",
+              "ldbk",
+              "образ BlueStacks",
+              "резервная копия BlueStacks",
+              "Data.vhdx BlueStacks",
+              "бэкап MEmu",
+              "образ MEmu",
+              "экспорт эмулятора Android",
+              "userdata-qemu.img",
+              "vmdk Android emulator game",
+              # Installed/server data
+              "полный кэш игры",
+              "кэш игры с сервера",
+              "данные после установки игры",
+              "скачанные данные игры",
+              "полный бэкап приложения с данными",
+              "Titanium Backup игра данные",
+              "Android data игра архив",
+              "Android obb игра архив",
+              "дамп данных мобильной игры",
+              "все ресурсы игры",
+              # Closed games / preservation
+              "закрытая мобильная игра архив",
+              "сервер игры закрыт данные",
+              "игра после закрытия сервера",
+              "офлайн версия мобильной игры",
+              "частный сервер мобильной игры",
+              "сохранение игры после закрытия",
+              "архив ресурсов мобильной игры",
+              # Rhythm/music games
+              "мобильная ритм игра",
+              "музыкальная игра Android",
+              "японская ритм игра Android",
+              "бэкап музыкальной игры",
+              "кэш ритм игры",
+              "ресурсы музыкальной игры",
+              "закрытая ритм игра",
+              "音ゲー バックアップ Android",
+              "音ゲー サービス終了 データ",
+          ]
+
+          HIGH_VALUE = [
+              "jp.co.applibot.ghmabgzaxkx", "octocacheevai", "octo.abot.sh",
+              "files/octo", "octo/pdb/1/102", "trdhaul6gig46gt4",
+              "seven's code", "sevens code", "セブンスコード",
+              ".npbk", ".ldbk", "data.vhdx", "userdata-qemu.img",
+              "резервная копия", "бэкап", "полный кэш", "данные игры",
+              "ритм", "музыкаль", "сервер игры закрыт", "офлайн версия",
+          ]
+
+          EXTERNAL_HOST_PATTERNS = [
+              r"(?:https?://)?(?:www\.)?mega\.nz/[^\s\"'<>]+",
+              r"(?:https?://)?drive\.google\.com/[^\s\"'<>]+",
+              r"(?:https?://)?disk\.yandex\.(?:ru|com)/[^\s\"'<>]+",
+              r"(?:https?://)?yadi\.sk/[^\s\"'<>]+",
+              r"(?:https?://)?cloud\.mail\.ru/[^\s\"'<>]+",
+              r"(?:https?://)?(?:www\.)?mediafire\.com/[^\s\"'<>]+",
+              r"(?:https?://)?pan\.baidu\.com/[^\s\"'<>]+",
+              r"(?:https?://)?[^\s\"'<>]*123(?:pan|865)\.[^\s\"'<>]+",
+              r"(?:https?://)?(?:www\.)?dropbox\.com/[^\s\"'<>]+",
+              r"(?:https?://)?t\.me/[^\s\"'<>]+",
+              r"magnet:\?xt=urn:btih:[A-Za-z0-9]+[^\s\"'<>]*",
+              r"https?://4pda\.(?:to|ru)/forum/dl/post/[^\s\"'<>]+",
+          ]
+
+          def safe_name(text: str) -> str:
+              return hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()[:14]
+
+          def decode_body(response: requests.Response) -> str:
+              data = response.content
+              candidates = []
+              if response.encoding:
+                  candidates.append(response.encoding)
+              candidates.extend(["windows-1251", "cp1251", "utf-8"])
+              for enc in candidates:
+                  try:
+                      value = data.decode(enc)
+                      if "�" not in value[:1000]:
+                          return value
+                  except Exception:
+                      pass
+              return data.decode("utf-8", "replace")
+
+          def cp1251_quote(text: str) -> str:
+              try:
+                  return urllib.parse.quote_from_bytes(text.encode("cp1251"))
+              except UnicodeEncodeError:
+                  return urllib.parse.quote(text, safe="")
+
+          def make_session():
+              if cloudscraper is not None:
+                  try:
+                      session = cloudscraper.create_scraper(
+                          browser={"browser": "chrome", "platform": "windows", "desktop": True}
+                      )
+                  except Exception:
+                      session = requests.Session()
+              else:
+                  session = requests.Session()
+              session.headers.update({
+                  "User-Agent": UA,
+                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                  "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.7,en;q=0.5",
+                  "Cache-Control": "no-cache",
+                  "Pragma": "no-cache",
+              })
+              return session
+
+          session = make_session()
+          request_log = []
+          links_by_term = defaultdict(set)
+          internal_rows = []
+
+          # Establish cookies on both current and historical domains.
+          for seed in ["https://4pda.to/forum/", "https://4pda.to/", "https://4pda.ru/forum/"]:
+              try:
+                  r = session.get(seed, timeout=35, allow_redirects=True)
+                  request_log.append({"kind": "seed", "url": seed, "status": r.status_code,
+                                      "final_url": r.url, "bytes": len(r.content)})
+              except Exception as exc:
+                  request_log.append({"kind": "seed", "url": seed, "error": repr(exc)})
+
+          # Internal forum endpoint, all useful result/source combinations.
+          combos = [
+              ("posts", "all", "dd"),
+              ("posts", "pst", "dd"),
+              ("topics", "top", "rel"),
+          ]
+          for term_index, term in enumerate(TERMS):
+              for result, source, sort in combos:
+                  encoded = cp1251_quote(term)
+                  for host in ["4pda.to", "4pda.ru"]:
+                      url = (
+                          f"https://{host}/forum/index.php?act=search"
+                          f"&result={result}&sort={sort}&source={source}"
+                          f"&query={encoded}&subforums=1&noform=1&st=0&exclude_trash=1"
+                      )
+                      try:
+                          r = session.get(url, headers={"Referer": f"https://{host}/forum/"},
+                                          timeout=45, allow_redirects=True)
+                          text = decode_body(r)
+                          fn = RAW_INTERNAL / f"{term_index:03d}_{safe_name(term)}_{host}_{result}_{source}.html"
+                          fn.write_text(text, encoding="utf-8", errors="replace")
+                          title = ""
+                          soup = BeautifulSoup(text, "lxml")
+                          if soup.title:
+                              title = soup.title.get_text(" ", strip=True)
+                          found_links = set()
+                          for a in soup.find_all("a", href=True):
+                              href = html.unescape(a["href"])
+                              href = urllib.parse.urljoin(r.url, href)
+                              if "4pda." in href and ("showtopic=" in href or "view=findpost" in href):
+                                  found_links.add(href)
+                          for match in re.finditer(r"https?://4pda\.(?:to|ru)/forum/[^\s\"'<>]+", text, re.I):
+                              href = html.unescape(match.group(0))
+                              if "showtopic=" in href or "view=findpost" in href:
+                                  found_links.add(href)
+                          for href in found_links:
+                              links_by_term[term].add(href)
+                          blocked = bool(re.search(r"(403 Forbidden|Access denied|Cloudflare|Доступ ограничен|captcha)", text, re.I))
+                          internal_rows.append({
+                              "term": term, "host": host, "result": result, "source": source,
+                              "status": r.status_code, "final_url": r.url, "bytes": len(r.content),
+                              "title": title, "links_found": len(found_links), "blocked": blocked,
+                              "saved_file": str(fn),
+                          })
+                          request_log.append({"kind": "internal", "term": term, "url": url,
+                                              "status": r.status_code, "final_url": r.url,
+                                              "bytes": len(r.content), "links": len(found_links),
+                                              "blocked": blocked})
+                      except Exception as exc:
+                          internal_rows.append({"term": term, "host": host, "result": result,
+                                                "source": source, "error": repr(exc)})
+                          request_log.append({"kind": "internal", "term": term, "url": url,
+                                              "error": repr(exc)})
+                      time.sleep(0.18)
+
+          # External search engines. Bing RSS is usually the cleanest machine-readable source.
+          engine_templates = {
+              "bing_rss": "https://www.bing.com/search?format=rss&q={q}",
+              "brave": "https://search.brave.com/search?q={q}&source=web",
+              "mojeek": "https://www.mojeek.com/search?q={q}",
+              "google_jina": "https://r.jina.ai/http://www.google.com/search?q={q}",
+              "bing_jina": "https://r.jina.ai/http://www.bing.com/search?q={q}",
+              "yandex": "https://yandex.com/search/?text={q}",
+          }
+
+          external_rows = []
+          external_queries = []
+          for term in TERMS:
+              external_queries.extend([
+                  f'site:4pda.to/forum "{term}"',
+                  f'site:4pda.ru/forum "{term}"',
+              ])
+          # Add focused generic queries that may reveal emulator megathreads.
+          external_queries.extend([
+              'site:4pda.to/forum Nox резервное копирование восстановление',
+              'site:4pda.to/forum LDPlayer резервное копирование восстановление',
+              'site:4pda.to/forum BlueStacks резервное копирование данные игры',
+              'site:4pda.to/forum MEmu экспорт импорт образ',
+              'site:4pda.to/forum музыкальные игры Android кэш',
+              'site:4pda.to/forum закрытые мобильные игры данные сервера',
+          ])
+
+          for q_index, query in enumerate(dict.fromkeys(external_queries)):
+              for engine, template in engine_templates.items():
+                  url = template.format(q=urllib.parse.quote_plus(query))
+                  try:
+                      r = session.get(url, timeout=45, allow_redirects=True)
+                      text = decode_body(r)
+                      fn = RAW_ENGINES / f"{q_index:03d}_{safe_name(query)}_{engine}.txt"
+                      fn.write_text(text, encoding="utf-8", errors="replace")
+                      found = set()
+                      # URLs may be direct, percent-encoded, or wrapped in search redirect URLs.
+                      candidates = re.findall(r"https?://[^\s\"'<>\]\)]+", html.unescape(text), re.I)
+                      for candidate in candidates:
+                          candidate = candidate.rstrip(".,;:&")
+                          decoded = urllib.parse.unquote(candidate)
+                          for value in (candidate, decoded):
+                              if re.search(r"https?://4pda\.(?:to|ru)/forum/", value, re.I):
+                                  m = re.search(r"https?://4pda\.(?:to|ru)/forum/[^\s\"'<>\]\)]+", value, re.I)
+                                  if m:
+                                      found.add(m.group(0).rstrip(".,;:&"))
+                      soup = BeautifulSoup(text, "lxml")
+                      for a in soup.find_all("a", href=True):
+                          href = urllib.parse.unquote(html.unescape(a["href"]))
+                          if "4pda.to/forum" in href or "4pda.ru/forum" in href:
+                              found.add(href)
+                      for href in found:
+                          links_by_term[query].add(href)
+                      external_rows.append({
+                          "query": query, "engine": engine, "status": r.status_code,
+                          "final_url": r.url, "bytes": len(r.content), "links_found": len(found),
+                          "saved_file": str(fn),
+                      })
+                      request_log.append({"kind": "engine", "query": query, "engine": engine,
+                                          "url": url, "status": r.status_code,
+                                          "bytes": len(r.content), "links": len(found)})
+                  except Exception as exc:
+                      external_rows.append({"query": query, "engine": engine, "error": repr(exc)})
+                      request_log.append({"kind": "engine", "query": query, "engine": engine,
+                                          "url": url, "error": repr(exc)})
+                  time.sleep(0.12)
+
+          # Normalize topic/post IDs from all discovered links.
+          topic_ids = set()
+          post_ids = set()
+          discovered_link_rows = []
+          for term, links in links_by_term.items():
+              for link in sorted(links):
+                  decoded = urllib.parse.unquote(html.unescape(link))
+                  tm = re.search(r"(?:showtopic=|[?&]t=)(\d+)", decoded)
+                  pm = re.search(r"(?:showpost=|[?&]p=)(\d+)", decoded)
+                  if tm:
+                      topic_ids.add(tm.group(1))
+                  if pm:
+                      post_ids.add(pm.group(1))
+                  discovered_link_rows.append({
+                      "term_or_query": term,
+                      "url": decoded,
+                      "topic_id": tm.group(1) if tm else "",
+                      "post_id": pm.group(1) if pm else "",
+                  })
+
+          # Fetch each topic via regular, print and lightweight endpoints.
+          topic_rows = []
+          external_link_rows = []
+          attachment_rows = []
+          for topic_id in sorted(topic_ids, key=int):
+              endpoints = {
+                  "regular_to": f"https://4pda.to/forum/index.php?showtopic={topic_id}",
+                  "regular_ru": f"https://4pda.ru/forum/index.php?showtopic={topic_id}",
+                  "lofi_to": f"https://4pda.to/forum/lofiversion/index.php?t={topic_id}",
+                  "lofi_ru": f"https://4pda.ru/forum/lofiversion/index.php?t={topic_id}",
+                  "print_to": f"https://4pda.to/forum/index.php?act=Print&client=printer&f=0&t={topic_id}",
+              }
+              best_text = ""
+              best_url = ""
+              best_status = 0
+              best_kind = ""
+              for kind, url in endpoints.items():
+                  try:
+                      r = session.get(url, timeout=50, allow_redirects=True)
+                      text = decode_body(r)
+                      fn = RAW_TOPICS / f"{topic_id}_{kind}.html"
+                      fn.write_text(text, encoding="utf-8", errors="replace")
+                      blocked = bool(re.search(r"(403 Forbidden|Access denied|Cloudflare|Доступ ограничен|captcha)", text, re.I))
+                      if r.status_code == 200 and not blocked and len(text) > len(best_text):
+                          best_text, best_url, best_status, best_kind = text, r.url, r.status_code, kind
+                      request_log.append({"kind": "topic", "topic_id": topic_id,
+                                          "endpoint": kind, "url": url, "status": r.status_code,
+                                          "final_url": r.url, "bytes": len(r.content),
+                                          "blocked": blocked})
+                  except Exception as exc:
+                      request_log.append({"kind": "topic", "topic_id": topic_id,
+                                          "endpoint": kind, "url": url, "error": repr(exc)})
+                  time.sleep(0.15)
+
+              if not best_text:
+                  topic_rows.append({"topic_id": topic_id, "accessible": False})
+                  continue
+
+              soup = BeautifulSoup(best_text, "lxml")
+              title = soup.title.get_text(" ", strip=True) if soup.title else ""
+              visible_text = soup.get_text(" ", strip=True)
+              low_text = visible_text.lower()
+              hits = [kw for kw in HIGH_VALUE if kw.lower() in low_text]
+              score = sum(8 if kw.lower() in [
+                  "jp.co.applibot.ghmabgzaxkx", "octocacheevai", "octo.abot.sh",
+                  "files/octo", "octo/pdb/1/102", "trdhaul6gig46gt4",
+                  "seven's code", "sevens code", "セブンスコード"
+              ] else 1 for kw in hits)
+
+              all_urls = set()
+              for a in soup.find_all("a", href=True):
+                  all_urls.add(urllib.parse.urljoin(best_url, html.unescape(a["href"])))
+              all_urls.update(re.findall(r"https?://[^\s\"'<>\]\)]+", best_text, re.I))
+
+              for url in sorted(all_urls):
+                  if re.search(r"4pda\.(?:to|ru)/forum/dl/post/", url, re.I):
+                      name = urllib.parse.unquote(url.rsplit("/", 1)[-1])
+                      attachment_rows.append({"topic_id": topic_id, "title": title,
+                                              "attachment_url": url, "filename_hint": name})
+                  elif any(re.search(pattern, url, re.I) for pattern in EXTERNAL_HOST_PATTERNS):
+                      external_link_rows.append({"topic_id": topic_id, "title": title,
+                                                 "source_url": best_url, "external_url": url})
+
+              # Search raw text too, because some old posts render links without anchors.
+              for pattern in EXTERNAL_HOST_PATTERNS:
+                  for m in re.finditer(pattern, best_text, re.I):
+                      url = html.unescape(m.group(0)).rstrip(".,;:&")
+                      if "4pda." in url and "/dl/post/" in url:
+                          attachment_rows.append({"topic_id": topic_id, "title": title,
+                                                  "attachment_url": url,
+                                                  "filename_hint": urllib.parse.unquote(url.rsplit("/", 1)[-1])})
+                      else:
+                          external_link_rows.append({"topic_id": topic_id, "title": title,
+                                                     "source_url": best_url, "external_url": url})
+
+              topic_rows.append({
+                  "topic_id": topic_id, "accessible": True, "best_endpoint": best_kind,
+                  "status": best_status, "url": best_url, "title": title,
+                  "text_chars": len(visible_text), "keyword_hits": " | ".join(hits),
+                  "score": score, "attachments": sum(1 for x in attachment_rows if x["topic_id"] == topic_id),
+                  "external_links": sum(1 for x in external_link_rows if x["topic_id"] == topic_id),
+              })
+
+          # Deduplicate output records.
+          def dedupe(rows, keys):
+              seen = set(); result = []
+              for row in rows:
+                  marker = tuple(row.get(k, "") for k in keys)
+                  if marker not in seen:
+                      seen.add(marker); result.append(row)
+              return result
+
+          discovered_link_rows = dedupe(discovered_link_rows, ["term_or_query", "url"])
+          external_link_rows = dedupe(external_link_rows, ["topic_id", "external_url"])
+          attachment_rows = dedupe(attachment_rows, ["topic_id", "attachment_url"])
+
+          def write_csv(name, rows, fieldnames=None):
+              path = ROOT / name
+              if fieldnames is None:
+                  fieldnames = sorted({k for row in rows for k in row}) if rows else ["empty"]
+              with path.open("w", newline="", encoding="utf-8-sig") as f:
+                  writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                  writer.writeheader(); writer.writerows(rows)
+
+          write_csv("internal_search_results.csv", internal_rows)
+          write_csv("external_search_results.csv", external_rows)
+          write_csv("discovered_4pda_links.csv", discovered_link_rows)
+          write_csv("topic_analysis.csv", sorted(topic_rows, key=lambda x: (-int(x.get("score", 0) or 0), int(x["topic_id"]))))
+          write_csv("attachments.csv", attachment_rows)
+          write_csv("external_mirrors.csv", external_link_rows)
+          (ROOT / "request_log.json").write_text(json.dumps(request_log, ensure_ascii=False, indent=2), encoding="utf-8")
+
+          summary = {
+              "terms": len(TERMS),
+              "internal_requests": sum(1 for x in request_log if x.get("kind") == "internal"),
+              "internal_http_200": sum(1 for x in request_log if x.get("kind") == "internal" and x.get("status") == 200),
+              "internal_blocked": sum(1 for x in request_log if x.get("kind") == "internal" and x.get("blocked")),
+              "engine_requests": sum(1 for x in request_log if x.get("kind") == "engine"),
+              "engine_http_200": sum(1 for x in request_log if x.get("kind") == "engine" and x.get("status") == 200),
+              "discovered_links": len(discovered_link_rows),
+              "topic_ids": len(topic_ids),
+              "accessible_topics": sum(1 for x in topic_rows if x.get("accessible")),
+              "attachments": len(attachment_rows),
+              "external_mirrors": len(external_link_rows),
+              "exact_target_topics": [x for x in topic_rows if int(x.get("score", 0) or 0) >= 8],
+          }
+          (ROOT / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+          report = [
+              "# 4PDA backup search results",
+              "",
+              f"- Terms: {summary['terms']}",
+              f"- Internal requests: {summary['internal_requests']}",
+              f"- Internal HTTP 200: {summary['internal_http_200']}",
+              f"- Internal blocked/challenge pages: {summary['internal_blocked']}",
+              f"- External-engine requests: {summary['engine_requests']}",
+              f"- External-engine HTTP 200: {summary['engine_http_200']}",
+              f"- Discovered 4PDA links: {summary['discovered_links']}",
+              f"- Unique topic IDs: {summary['topic_ids']}",
+              f"- Accessible topics: {summary['accessible_topics']}",
+              f"- 4PDA attachments: {summary['attachments']}",
+              f"- External mirrors: {summary['external_mirrors']}",
+              "",
+              "## Highest-scoring topics",
+              "",
+          ]
+          ranked = sorted([x for x in topic_rows if x.get("accessible")],
+                          key=lambda x: (-int(x.get("score", 0) or 0), x.get("title", "")))[:50]
+          if ranked:
+              for x in ranked:
+                  report.append(f"- Score {x.get('score', 0)} — {x.get('title', '')} — {x.get('url', '')} — {x.get('keyword_hits', '')}")
+          else:
+              report.append("No accessible topic pages were discovered.")
+          report.extend(["", "## Exact-target result", ""])
+          if summary["exact_target_topics"]:
+              for x in summary["exact_target_topics"]:
+                  report.append(f"- {x.get('title')} — {x.get('url')}")
+          else:
+              report.append("No topic contained the exact SEVEN'S CODE package, Octo paths, cache filename, key or title variants.")
+          (ROOT / "README.md").write_text("\n".join(report), encoding="utf-8")
+
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+
+          python3 /tmp/search_4pda.py
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4pda-backup-search-results
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
