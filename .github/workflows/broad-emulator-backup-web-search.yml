@@ -6,6 +6,11 @@ on:
       - sevens-code-lookup
     paths:
       - .github/workflows/broad-emulator-backup-web-search.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/broad-emulator-backup-web-search.yml
 
 permissions:
   contents: read
@@ -65,7 +70,6 @@ jobs:
             if i<90:
               engines[f'yahoo_{i:03d}.html']=f'https://search.yahoo.com/search?p={enc}'
 
-          # Direct community/search APIs and file/torrent index search pages.
           direct_queries=['npbk','ldbk','Nox backup game','LDPlayer backup game','rhythm game backup','music game data files','mobile game server files']
           for i,q in enumerate(direct_queries):
             enc=urllib.parse.quote_plus(q)
@@ -79,10 +83,6 @@ jobs:
             engines[f'zenodo_{i}.json']='https://zenodo.org/api/records?size=100&q='+urllib.parse.quote(q)
             engines[f'hf_ds_{i}.json']='https://huggingface.co/api/datasets?limit=100&search='+urllib.parse.quote(q)
             engines[f'hf_models_{i}.json']='https://huggingface.co/api/models?limit=100&search='+urllib.parse.quote(q)
-
-          # Try known/public file indexer entry points; failures are preserved.
-          for i,q in enumerate(direct_queries):
-            enc=urllib.parse.quote_plus(q)
             engines[f'filepursuit_{i}.html']=f'https://filepursuit.com/pursuit?q={enc}&type=all'
             engines[f'filesearch_{i}.html']=f'https://filesearch.link/search?q={enc}'
             engines[f'ftpsearcher_{i}.html']=f'https://www.ftpsearcher.com/search?q={enc}'
@@ -104,7 +104,6 @@ jobs:
             inventory=list(ex.map(fetch,engines.items()))
           (OUT/'request_inventory.json').write_text(json.dumps(inventory,ensure_ascii=False,indent=2),encoding='utf-8')
 
-          # GitHub REST searches for code and repositories.
           token=os.environ.get('GH_TOKEN','')
           gh=[]
           gh_queries=['npbk','ldbk','"Nox backup" game','"LDPlayer backup" game','"mobile game preservation" android','"rhythm game" assets backup','"server files" android game']
@@ -120,7 +119,6 @@ jobs:
               time.sleep(1)
           (OUT/'github_results.json').write_text(json.dumps(gh,ensure_ascii=False,indent=2),encoding='utf-8')
 
-          # Parse all text and rank candidate URLs/lines.
           url_re=re.compile(r'(?:https?|ftp)://[^\s"\'<>\\]+',re.I)
           key_re=re.compile(r'(?i)(\.npbk|\.ldbk|\.vmdk|\.vhdx|\.vdi|\.ova|\.ovf|\.qcow2|nox.{0,20}backup|ldplayer.{0,20}backup|bluestacks.{0,20}backup|memu.{0,20}backup|mumu.{0,20}backup|server.{0,20}(files|download)|android.{0,20}data files|rhythm.{0,20}(backup|data|assets)|music game.{0,20}(backup|data|assets)|end of service|shutdown.{0,20}backup|停服|音游|音ゲー)')
           interesting_hosts=('ftp','drive.google.com','mega.nz','mediafire.com','pan.baidu.com','123pan.com','alipan.com','aliyundrive.com','lanzou','yadi.sk','disk.yandex','archive.org','github.com','gitlab.com','huggingface.co','zenodo.org','reddit.com','4pda','xdaforums','gbatemp','cs.rin.ru','mobilism','tieba.baidu','52pojie','nga.cn','gamer.com.tw','btdig','bt4g','nyaa.si','sourceforge')
@@ -138,8 +136,6 @@ jobs:
           (OUT/'evidence_lines.json').write_text(json.dumps(lines,ensure_ascii=False,indent=2),encoding='utf-8')
           (OUT/'candidate_links.txt').write_text('\n'.join(sorted(links)),encoding='utf-8')
 
-          # Lightweight validation of candidate HTTP/FTP URLs; no large downloads.
-          candidates=[]
           def validate(u):
             try:
               req=urllib.request.Request(u,headers={'User-Agent':UA,'Range':'bytes=0-1023'})
