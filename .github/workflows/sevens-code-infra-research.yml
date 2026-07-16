@@ -1,0 +1,83 @@
+name: SEVEN'S CODE infrastructure research
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sevens-code-infra-research.yml
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query public and historical endpoints
+        shell: bash
+        run: |
+          set +e
+          mkdir -p result
+          API_KEY='AIzaSyC8pd7i1_IAZEikDtgKdUslNy79oo3L__E'
+
+          fetch() {
+            name="$1"
+            url="$2"
+            curl -k -L --compressed --connect-timeout 15 --max-time 90 --retry 1 \
+              -A 'Mozilla/5.0 SEVENS-CODE-preservation' \
+              -D "result/${name}.headers" \
+              -o "result/${name}.body" \
+              -w '%{http_code}\n%{content_type}\n%{size_download}\n%{url_effective}\n' \
+              "$url" > "result/${name}.status" 2> "result/${name}.error"
+          }
+
+          # Firebase Realtime Database
+          fetch firebase_root 'https://seven-scode.firebaseio.com/.json'
+          fetch firebase_shallow 'https://seven-scode.firebaseio.com/.json?shallow=true'
+          fetch firebase_root_key "https://seven-scode.firebaseio.com/.json?key=${API_KEY}"
+          fetch firebase_version 'https://seven-scode.firebaseio.com/version.json'
+          fetch firebase_versions 'https://seven-scode.firebaseio.com/versions.json'
+          fetch firebase_config 'https://seven-scode.firebaseio.com/config.json'
+          fetch firebase_master 'https://seven-scode.firebaseio.com/master.json'
+          fetch firebase_masterdata 'https://seven-scode.firebaseio.com/master_data.json'
+
+          # Firebase Storage / Google Cloud Storage
+          fetch firebase_storage_list 'https://firebasestorage.googleapis.com/v0/b/seven-scode.appspot.com/o?maxResults=1000'
+          fetch firebase_storage_list_key "https://firebasestorage.googleapis.com/v0/b/seven-scode.appspot.com/o?maxResults=1000&key=${API_KEY}"
+          fetch gcs_json_list "https://storage.googleapis.com/storage/v1/b/seven-scode.appspot.com/o?maxResults=1000&key=${API_KEY}"
+          fetch gcs_xml_list 'https://storage.googleapis.com/seven-scode.appspot.com?list-type=2&max-keys=1000'
+          fetch gcs_bucket_root 'https://storage.googleapis.com/seven-scode.appspot.com/'
+
+          # Wayback CDX indexes
+          fetch cdx_octo_all 'https://web.archive.org/cdx/search/cdx?url=octo.abot.sh/*&output=json&fl=timestamp,original,statuscode,mimetype,digest,length&collapse=digest'
+          fetch cdx_octo_list 'https://web.archive.org/cdx/search/cdx?url=octo.abot.sh/v1/list/102/*&output=json&fl=timestamp,original,statuscode,mimetype,digest,length'
+          fetch cdx_octo_revision 'https://web.archive.org/cdx/search/cdx?url=octo.abot.sh/v1/revision/102&output=json&fl=timestamp,original,statuscode,mimetype,digest,length'
+          fetch cdx_firebase 'https://web.archive.org/cdx/search/cdx?url=seven-scode.firebaseio.com/*&output=json&fl=timestamp,original,statuscode,mimetype,digest,length&collapse=digest'
+          fetch cdx_storage 'https://web.archive.org/cdx/search/cdx?url=storage.googleapis.com/seven-scode.appspot.com/*&output=json&fl=timestamp,original,statuscode,mimetype,digest,length&collapse=digest'
+          fetch cdx_official 'https://web.archive.org/cdx/search/cdx?url=www.sevenscode.jp/*&output=json&fl=timestamp,original,statuscode,mimetype,digest,length&collapse=urlkey&filter=statuscode:200'
+
+          # Common Crawl historical indexes
+          fetch cc_2022_octo 'https://index.commoncrawl.org/CC-MAIN-2022-49-index?url=octo.abot.sh/*&output=json'
+          fetch cc_2021_octo 'https://index.commoncrawl.org/CC-MAIN-2021-49-index?url=octo.abot.sh/*&output=json'
+          fetch cc_2020_octo 'https://index.commoncrawl.org/CC-MAIN-2020-50-index?url=octo.abot.sh/*&output=json'
+          fetch cc_2022_firebase 'https://index.commoncrawl.org/CC-MAIN-2022-49-index?url=seven-scode.firebaseio.com/*&output=json'
+
+          # Certificate/subdomain/passive public sources
+          fetch crt_abot 'https://crt.sh/?q=%25.abot.sh&output=json'
+          fetch certspotter_abot 'https://api.certspotter.com/v1/issuances?domain=abot.sh&include_subdomains=true&expand=dns_names'
+          fetch urlscan_octo 'https://urlscan.io/api/v1/search/?q=domain:octo.abot.sh'
+          fetch urlscan_sevens 'https://urlscan.io/api/v1/search/?q=domain:sevenscode.jp'
+          fetch hackertarget_abot 'https://api.hackertarget.com/hostsearch/?q=abot.sh'
+          fetch rapiddns_abot 'https://rapiddns.io/subdomain/abot.sh?full=1'
+
+          find result -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > result/inventory.txt
+          cat result/inventory.txt
+          for f in result/*.status; do echo "===== $f ====="; cat "$f"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sevens-code-infrastructure-results
+          path: result/
+          if-no-files-found: error
+          retention-days: 7
