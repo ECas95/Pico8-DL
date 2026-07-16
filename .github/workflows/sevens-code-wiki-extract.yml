@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          mkdir -p result/extracted export
+          mkdir -p result/extracted export package
           URL='https://archive.org/download/wiki-sevens_codefandomcom/sevens_codefandomcom-20220213-wikidump.7z'
           curl -L --fail --retry 5 --connect-timeout 30 --max-time 600 -o result/sevens_code_wikidump.7z "$URL"
           sha256sum result/sevens_code_wikidump.7z > export/sha256.txt
@@ -39,10 +39,12 @@ jobs:
           pathlib.Path('export/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
           print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
+          (cd export && zip -q -r ../package/sevens_code_wiki_images_and_data.zip .)
+          ls -lh package/sevens_code_wiki_images_and_data.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sevens-code-wiki-images-and-data
-          path: export/
+          name: sevens-code-wiki-package
+          path: package/sevens_code_wiki_images_and_data.zip
           if-no-files-found: error
           retention-days: 7
