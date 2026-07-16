@@ -1,0 +1,126 @@
+name: SEVEN'S CODE snapshot search PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sevens-code-snapshot-search-pr.yml
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Search snapshot indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result/raw result/metadata
+          python3 - <<'PY'
+          import concurrent.futures, html, json, os, pathlib, re, time, urllib.parse, urllib.request
+          OUT=pathlib.Path('result'); RAW=OUT/'raw'; META=OUT/'metadata'
+          UA='Mozilla/5.0 SEVENS-CODE-emulator-snapshot-search'
+          exact=["SEVEN'S CODE",'SEVENS CODE','セブンスコード','jp.co.applibot.ghmabgzaxkx','octocacheevai','octo.abot.sh']
+          snapshot=['BlueStacks','Data.vhdx','BlueStacks_nxt','Nox','BignoxVMS','LDPlayer','leidian','MuMu','userdata-qemu.img','qcow2','vmdk','vdi','ova','Titanium Backup','Swift Backup','Neo Backup','emulator backup','snapshot']
+          queries=[]
+          for e in exact:
+              queries.append(f'"{e}"')
+              queries.extend(f'"{e}" "{s}"' for s in snapshot)
+          queries += [
+            'セブンスコード エミュレータ バックアップ','セブンスコード 端末 データ 保存','セブンスコード サービス終了 保存',
+            "SEVEN'S CODE 模拟器 备份", "SEVEN'S CODE 数据包 存档", "SEVEN'S CODE 全曲 离线版",
+            "site:drive.google.com \"SEVEN'S CODE\"", "site:mega.nz \"SEVEN'S CODE\"", "site:mediafire.com \"SEVEN'S CODE\"",
+            "site:pan.baidu.com \"SEVEN'S CODE\"", "site:123pan.com \"SEVEN'S CODE\"", "site:alipan.com \"SEVEN'S CODE\"",
+            '"files/octo/pdb/1/102"','"octocacheevai" file','"jp.co.applibot.ghmabgzaxkx" file',
+            "extravatorz SEVEN'S CODE backup", "Tricoro SEVEN'S CODE backup", "ymnh0sub SEVEN'S CODE backup",
+          ]
+          queries=list(dict.fromkeys(queries))
+
+          def get(url, timeout=70):
+              req=urllib.request.Request(url,headers={'User-Agent':UA,'Accept':'*/*'})
+              with urllib.request.urlopen(req,timeout=timeout) as r:
+                  return getattr(r,'status',200),r.headers.get('content-type',''),r.read(),r.geturl()
+
+          urls={}
+          for i,q in enumerate(queries):
+              enc=urllib.parse.quote_plus(q)
+              urls[f'bing_{i:03d}.xml']=f'https://www.bing.com/search?format=rss&q={enc}'
+              urls[f'ddg_{i:03d}.html']=f'https://html.duckduckgo.com/html/?q={enc}'
+              if i<100: urls[f'google_{i:03d}.txt']=f'https://r.jina.ai/http://www.google.com/search?q={enc}'
+          iaq=exact+[
+            '(bluestacks OR nox OR ldplayer OR mumu) AND (backup OR snapshot) AND ("rhythm game" OR "mobile game")',
+            '(Data.vhdx OR userdata-qemu.img OR qcow2 OR vmdk OR vdi OR ova) AND android AND game'
+          ]
+          for i,q in enumerate(iaq):
+              params=urllib.parse.urlencode({'q':q,'fl[]':'identifier,title,description,subject,creator,mediatype,collection,date,downloads','rows':200,'page':1,'output':'json'})
+              urls[f'ia_{i:03d}.json']='https://archive.org/advancedsearch.php?'+params
+
+          def fetch(pair):
+              name,url=pair
+              try:
+                  st,ct,data,final=get(url); (RAW/name).write_bytes(data)
+                  return {'name':name,'url':url,'final':final,'status':st,'content_type':ct,'bytes':len(data)}
+              except Exception as ex:
+                  (RAW/(name+'.error')).write_text(str(ex)); return {'name':name,'url':url,'error':str(ex)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+              inv=list(ex.map(fetch,urls.items()))
+          (OUT/'requests.json').write_text(json.dumps(inv,ensure_ascii=False,indent=2))
+
+          ia_docs={}
+          for p in RAW.glob('ia_*.json'):
+              try:
+                  for d in json.loads(p.read_text(errors='replace')).get('response',{}).get('docs',[]):
+                      if d.get('identifier'): ia_docs[d['identifier']]=d
+              except Exception: pass
+          def inspect(ident):
+              try:
+                  st,ct,data,final=get('https://archive.org/metadata/'+urllib.parse.quote(ident)); (META/(ident+'.json')).write_bytes(data)
+                  obj=json.loads(data); meta=obj.get('metadata',{}); files=obj.get('files',[]); names=[str(x.get('name','')) for x in files]
+                  text=(json.dumps(meta,ensure_ascii=False)+'\n'+'\n'.join(names)).lower()
+                  ex=[x for x in exact if x.lower() in text]
+                  disks=[n for n in names if re.search(r'(?i)(data\.vhdx|userdata-qemu\.img|\.qcow2$|\.vmdk$|\.vdi$|\.ova$|\.ovf$|\.tib$|titanium|swift.?backup|neo.?backup|bluestacks|bignox|ldplayer|leidian|mumu)',n)]
+                  return {'identifier':ident,'metadata':meta,'exact':ex,'disk_files':disks,'file_count':len(files)}
+              except Exception as ex: return {'identifier':ident,'error':str(ex)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+              items=list(ex.map(inspect,sorted(ia_docs)))
+          positive=[x for x in items if x.get('exact') or x.get('disk_files')]
+          (OUT/'ia_items.json').write_text(json.dumps(items,ensure_ascii=False,indent=2)); (OUT/'ia_positive.json').write_text(json.dumps(positive,ensure_ascii=False,indent=2))
+
+          key=re.compile(r'(?i)(seven.?s.?code|セブンスコード|jp\.co\.applibot\.ghmabgzaxkx|octocacheevai|files/octo|data\.vhdx|userdata-qemu\.img|\.qcow2|\.vmdk|\.vdi|bluestacks|bignox|ldplayer|leidian|mumu)')
+          urlre=re.compile(r'https?://[^\s"\'<>\\]+'); lines=[]; links=set()
+          hosts=('archive.org','drive.google.com','mega.nz','mediafire.com','pan.baidu.com','123pan.com','alipan.com','lanzou','discord.gg','t.me','github.com','huggingface.co','youtube.com','bilibili.com','nicovideo.jp')
+          for p in RAW.iterdir():
+              if not p.is_file() or p.name.endswith('.error'): continue
+              text=html.unescape(p.read_text(errors='replace'))
+              for line in text.splitlines():
+                  if key.search(line): lines.append({'source':p.name,'line':line[:5000]})
+              for u in urlre.findall(text):
+                  u=u.rstrip(').,];&')
+                  if any(h in u.lower() for h in hosts): links.add(u)
+          (OUT/'evidence.json').write_text(json.dumps(lines,ensure_ascii=False,indent=2)); (OUT/'links.txt').write_text('\n'.join(sorted(links)))
+
+          gh=[]; token=os.environ.get('GH_TOKEN','')
+          for q in ['"jp.co.applibot.ghmabgzaxkx"','octocacheevai','"octo.abot.sh"','"files/octo/pdb/1/102"','"SEVEN\'S CODE" backup','"SEVEN\'S CODE" bluestacks']:
+              url='https://api.github.com/search/code?'+urllib.parse.urlencode({'q':q,'per_page':100})
+              req=urllib.request.Request(url,headers={'User-Agent':UA,'Accept':'application/vnd.github+json','Authorization':f'Bearer {token}'})
+              try:
+                  with urllib.request.urlopen(req,timeout=60) as r: obj=json.loads(r.read())
+                  gh += [{'query':q,'repository':i.get('repository',{}).get('full_name'),'path':i.get('path'),'url':i.get('html_url')} for i in obj.get('items',[])]
+              except Exception as ex: gh.append({'query':q,'error':str(ex)})
+              time.sleep(1)
+          (OUT/'github.json').write_text(json.dumps(gh,ensure_ascii=False,indent=2))
+          summary={'queries':len(queries),'requests':len(inv),'successful':sum('status' in x for x in inv),'ia_items':len(items),'ia_positive':len(positive),'evidence_lines':len(lines),'candidate_links':len(links),'github_hits':sum('url' in x for x in gh)}
+          (OUT/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)); print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sevens-code-snapshot-search-pr
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
