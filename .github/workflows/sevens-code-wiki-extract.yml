@@ -18,34 +18,31 @@ jobs:
         shell: bash
         run: |
           set -e
-          mkdir -p result/extracted
+          mkdir -p result/extracted export
           URL='https://archive.org/download/wiki-sevens_codefandomcom/sevens_codefandomcom-20220213-wikidump.7z'
           curl -L --fail --retry 5 --connect-timeout 30 --max-time 600 -o result/sevens_code_wikidump.7z "$URL"
-          sha256sum result/sevens_code_wikidump.7z > result/sha256.txt
-          7z l -slt result/sevens_code_wikidump.7z > result/archive_listing.txt
-          7z x -y result/sevens_code_wikidump.7z -oresult/extracted > result/extraction.log
-          find result/extracted -type f -printf '%P\t%s\n' | sort > result/extracted_files.tsv
+          sha256sum result/sevens_code_wikidump.7z > export/sha256.txt
+          7z l -slt result/sevens_code_wikidump.7z > export/archive_listing.txt
+          7z x -y result/sevens_code_wikidump.7z -oresult/extracted > export/extraction.log
+          find result/extracted -type f -printf '%P\t%s\n' | sort > export/extracted_files.tsv
+          mkdir -p export/images export/wiki_data
+          find result/extracted -type f -iname '*.png' -exec cp -v {} export/images/ \;
+          find result/extracted -type f \( -iname '*.xml' -o -iname '*.json' -o -iname '*.html' -o -iname '*.txt' \) -exec cp -v {} export/wiki_data/ \;
           python3 - <<'PY'
           import collections, json, pathlib
           root=pathlib.Path('result/extracted')
           files=[p for p in root.rglob('*') if p.is_file()]
           ext=collections.Counter((p.suffix.lower() or '(none)') for p in files)
           largest=sorted((p.stat().st_size,str(p.relative_to(root))) for p in files)[-100:][::-1]
-          keywords=('music','song','jacket','banner','cover','chart','note','seven','character','story','image')
-          interesting=[]
-          for p in files:
-              rel=str(p.relative_to(root))
-              if any(k in rel.lower() for k in keywords):
-                  interesting.append({'path':rel,'size':p.stat().st_size})
-          summary={'file_count':len(files),'extensions':ext,'largest':largest,'interesting_count':len(interesting)}
-          pathlib.Path('result/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2,default=dict),encoding='utf-8')
-          pathlib.Path('result/interesting_files.json').write_text(json.dumps(interesting,ensure_ascii=False,indent=2),encoding='utf-8')
-          print(json.dumps(summary,ensure_ascii=False,indent=2,default=dict))
+          images=[{'path':str(p.relative_to(root)),'size':p.stat().st_size} for p in files if p.suffix.lower()=='.png']
+          summary={'file_count':len(files),'extensions':dict(ext),'largest':largest,'images':images}
+          pathlib.Path('export/summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
           PY
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sevens-code-wiki-archive-inspection
-          path: result/
+          name: sevens-code-wiki-images-and-data
+          path: export/
           if-no-files-found: error
           retention-days: 7
