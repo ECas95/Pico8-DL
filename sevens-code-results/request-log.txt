@@ -283,3 +283,60 @@ HTTP/bytes: 72
 ===== cc_2020_itunes.json =====
 https://index.commoncrawl.org/CC-MAIN-2020-50-index?url=itunes.apple.com/jp/app/*sevens*code*&output=json
 HTTP/bytes: 74
+===== apple_en.json =====
+https://itunes.apple.com/search?term=SEVEN%27S%20CODE&country=jp&entity=software&limit=200
+HTTP/bytes: 1315243
+===== apple_en_plain.json =====
+https://itunes.apple.com/search?term=SEVENS%20CODE&country=jp&entity=software&limit=200
+HTTP/bytes: 537504
+===== apple_ja.json =====
+https://itunes.apple.com/search?term=%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89&country=jp&entity=software&limit=200
+HTTP/bytes: 541967
+===== apple_applibot.json =====
+https://itunes.apple.com/search?term=Applibot&country=jp&entity=software&limit=200
+HTTP/bytes: 1438712
+===== ddg_en.html =====
+https://html.duckduckgo.com/html/?q=%22SEVEN%27S+CODE%22+%22apps.apple.com%22
+HTTP/bytes: 14319
+===== ddg_ja.html =====
+https://html.duckduckgo.com/html/?q=%22%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89%22+%22apps.apple.com%22
+HTTP/bytes: 14317
+===== bing_en.xml =====
+https://www.bing.com/search?format=rss&q=%22SEVEN%27S%20CODE%22%20%22apps.apple.com%22
+HTTP/bytes: 5064
+===== bing_ja.xml =====
+https://www.bing.com/search?format=rss&q=%22%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89%22%20%22apps.apple.com%22
+HTTP/bytes: 4981
+===== jina_google_en.txt =====
+https://r.jina.ai/http://www.google.com/search?q=%22SEVEN%27S%20CODE%22+%22apps.apple.com%22
+HTTP/bytes: 902
+===== jina_google_ja.txt =====
+https://r.jina.ai/http://www.google.com/search?q=%22%E3%82%BB%E3%83%96%E3%83%B3%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%89%22+%22apps.apple.com%22
+HTTP/bytes: 795
+===== jina_bing_en.txt =====
+https://r.jina.ai/http://www.bing.com/search?q=%22SEVEN%27S%20CODE%22+%22apps.apple.com%22
+HTTP/bytes: 4929
+===== wayback_apps_sevens.json =====
+https://web.archive.org/cdx/search/cdx?url=apps.apple.com/jp/app/*sevens*code*/id*&output=json&fl=timestamp,original,statuscode,mimetype,digest&filter=statuscode:200&collapse=urlkey
+HTTP/bytes: 3
+===== wayback_itunes_sevens.json =====
+https://web.archive.org/cdx/search/cdx?url=itunes.apple.com/jp/app/*sevens*code*/id*&output=json&fl=timestamp,original,statuscode,mimetype,digest&filter=statuscode:200&collapse=urlkey
+HTTP/bytes: 3
+===== wayback_official_domain.json =====
+https://web.archive.org/cdx/search/cdx?url=sevenscode.jp/*&output=json&fl=timestamp,original,statuscode,mimetype,digest&filter=statuscode:200&collapse=urlkey
+HTTP/bytes: 82806
+===== wayback_applibot.json =====
+https://web.archive.org/cdx/search/cdx?url=www.applibot.co.jp/*seven*code*&output=json&fl=timestamp,original,statuscode,mimetype,digest&filter=statuscode:200&collapse=urlkey
+HTTP/bytes: 3
+===== cc_2020_apps.json =====
+https://index.commoncrawl.org/CC-MAIN-2020-50-index?url=apps.apple.com/jp/app/*sevens*code*&output=json
+HTTP/bytes: 72
+===== cc_2021_apps.json =====
+https://index.commoncrawl.org/CC-MAIN-2021-49-index?url=apps.apple.com/jp/app/*sevens*code*&output=json
+HTTP/bytes: 72
+===== cc_2022_apps.json =====
+https://index.commoncrawl.org/CC-MAIN-2022-49-index?url=apps.apple.com/jp/app/*sevens*code*&output=json
+HTTP/bytes: 72
+===== cc_2020_itunes.json =====
+https://index.commoncrawl.org/CC-MAIN-2020-50-index?url=itunes.apple.com/jp/app/*sevens*code*&output=json
+HTTP/bytes: 74
